@@ -90,6 +90,59 @@ export const negotiationsMock = [
   },
 ];
 
+export function getNegotiationById(id: string) {
+  return negotiationsMock.find((n) => n.id === id);
+}
+
+/** Sessions aligned with DB shape; link to negotiationsMock (not legacy `sessions`). */
+export const sessionsMockForUi = [
+  {
+    id: "s-2",
+    negotiationId: "neg-1",
+    sessionNumber: 1,
+    title: "Workload & class size",
+    scheduledAt: "2025-03-18T18:00:00.000Z",
+    location: "Zoom",
+    status: "completed" as const,
+    summary:
+      "Discussed class size metrics; employer requested cost study for next session." as string | null,
+    nextSessionDate: "2025-04-02" as string | null,
+  },
+  {
+    id: "s-1",
+    negotiationId: "neg-1",
+    sessionNumber: 2,
+    title: "Economic package — opening positions",
+    scheduledAt: "2025-04-02T13:00:00.000Z",
+    location: "District Office — Conference Room A",
+    status: "scheduled" as const,
+    summary: null as string | null,
+    nextSessionDate: null as string | null,
+  },
+  {
+    id: "s-4",
+    negotiationId: "neg-3",
+    sessionNumber: 1,
+    title: "Staffing ratios",
+    scheduledAt: "2025-03-28T09:00:00.000Z",
+    location: "Riverside Medical Center — HR Suite",
+    status: "completed" as const,
+    summary: "Tentative agreement on ratios pending legal review." as string | null,
+    nextSessionDate: null as string | null,
+  },
+  {
+    id: "s-3",
+    negotiationId: "neg-2",
+    sessionNumber: 1,
+    title: "Safety & scheduling",
+    scheduledAt: "2025-04-10T15:30:00.000Z",
+    location: "MTA Union Hall",
+    status: "in_progress" as const,
+    summary: null as string | null,
+    nextSessionDate: null as string | null,
+  },
+];
+
 export const bargainingUnits: BargainingUnit[] = [
   {
     id: "bu-1",
