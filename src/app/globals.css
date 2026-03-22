@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+@theme {
+  --color-sidebar: #0f172a;
+  --color-sidebar-muted: #64748b;
+  --color-sidebar-accent: #1e293b;
+  --color-surface: #f8fafc;
+  --color-surface-card: #ffffff;
+}
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  @apply antialiased text-slate-900;
+}
