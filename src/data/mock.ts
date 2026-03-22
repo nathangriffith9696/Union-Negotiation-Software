@@ -6,7 +6,11 @@ import type {
   Note,
   Proposal,
 } from "@/types/models";
-import type { ProposingParty } from "@/types/database";
+import type {
+  NoteType,
+  NoteVisibility,
+  ProposingParty,
+} from "@/types/database";
 
 export const districts: District[] = [
   {
@@ -322,6 +326,45 @@ export const notes: Note[] = [
     createdAt: "2025-03-28T12:30:00.000Z",
   },
 ];
+
+const notesMockNoteTypes: NoteType[] = [
+  "strategy",
+  "caucus",
+  "general",
+  "legal",
+];
+
+const notesMockVisibilities: NoteVisibility[] = [
+  "team",
+  "team",
+  "organization",
+  "shared_readonly",
+];
+
+/** Negotiation-scoped notes for list UI; mirrors DB shape. */
+export const notesMockForUi = notes.map((n, i) => {
+  const session = n.sessionId
+    ? sessions.find((s) => s.id === n.sessionId)
+    : undefined;
+  const proposal = n.proposalId
+    ? proposals.find((p) => p.id === n.proposalId)
+    : undefined;
+  const buId = session?.bargainingUnitId ?? proposal?.bargainingUnitId;
+  const neg = buId ? getNegotiationByBargainingUnitId(buId) : undefined;
+
+  return {
+    id: n.id,
+    negotiationId: neg?.id ?? "neg-1",
+    sessionId: n.sessionId,
+    proposalId: n.proposalId,
+    body: n.body,
+    author: n.author,
+    noteType: notesMockNoteTypes[i] ?? "general",
+    visibility: notesMockVisibilities[i] ?? "team",
+    createdAt: n.createdAt,
+    updatedAt: n.createdAt,
+  };
+});
 
 export function getDistrictById(id: string) {
   return districts.find((d) => d.id === id);
