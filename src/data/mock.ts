@@ -59,6 +59,37 @@ export const locals: Local[] = [
   },
 ];
 
+/** UI mock for negotiations list (IDs are not UUIDs; Supabase uses real UUIDs). */
+export const negotiationsMock = [
+  {
+    id: "neg-1",
+    bargainingUnitId: "bu-1",
+    title: "2025–2028 successor agreement — Teachers Unit",
+    status: "active" as const,
+    negotiationType: "successor" as const,
+    startedOn: "2025-01-15",
+    targetContractEffectiveDate: "2025-07-01",
+  },
+  {
+    id: "neg-2",
+    bargainingUnitId: "bu-3",
+    title: "Transit operators — safety & scheduling cycle",
+    status: "active" as const,
+    negotiationType: "successor" as const,
+    startedOn: "2025-02-01",
+    targetContractEffectiveDate: null as string | null,
+  },
+  {
+    id: "neg-3",
+    bargainingUnitId: "bu-4",
+    title: "Allied Health — staffing ratios reopener",
+    status: "tentative_agreement" as const,
+    negotiationType: "reopener" as const,
+    startedOn: "2024-11-01",
+    targetContractEffectiveDate: "2025-04-01",
+  },
+];
+
 export const bargainingUnits: BargainingUnit[] = [
   {
     id: "bu-1",
