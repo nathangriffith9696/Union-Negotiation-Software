@@ -7,6 +7,7 @@ import type {
   Proposal,
 } from "@/types/models";
 import type {
+  DocumentType,
   NoteType,
   NoteVisibility,
   ProposingParty,
@@ -365,6 +366,56 @@ export const notesMockForUi = notes.map((n, i) => {
     updatedAt: n.createdAt,
   };
 });
+
+/** Negotiation-scoped documents for list UI; mirrors DB shape. */
+export const documentsMockForUi = [
+  {
+    id: "doc-1",
+    negotiationId: "neg-1",
+    sessionId: "s-2" as string | null,
+    proposalId: "p-1" as string | null,
+    fileName: "Class-size-proposal-v2.pdf",
+    documentType: "proposal_pdf" as DocumentType,
+    mimeType: "application/pdf",
+    byteSize: 245_760,
+    uploadedAt: "2025-03-17T14:00:00.000Z",
+  },
+  {
+    id: "doc-2",
+    negotiationId: "neg-1",
+    sessionId: null as string | null,
+    proposalId: null as string | null,
+    fileName: "March-2025-session-minutes.docx",
+    documentType: "minutes" as DocumentType,
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    byteSize: 52_400,
+    uploadedAt: "2025-03-19T10:30:00.000Z",
+  },
+  {
+    id: "doc-3",
+    negotiationId: "neg-2",
+    sessionId: "s-3" as string | null,
+    proposalId: null as string | null,
+    fileName: "Safety-bulletin-draft.pdf",
+    documentType: "correspondence" as DocumentType,
+    mimeType: "application/pdf",
+    byteSize: 128_000,
+    uploadedAt: "2025-04-08T16:00:00.000Z",
+  },
+  {
+    id: "doc-4",
+    negotiationId: "neg-3",
+    sessionId: null as string | null,
+    proposalId: "p-4" as string | null,
+    fileName: "On-call-economic-model.xlsx",
+    documentType: "economic_model" as DocumentType,
+    mimeType:
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    byteSize: 89_200,
+    uploadedAt: "2025-03-27T11:15:00.000Z",
+  },
+];
 
 export function getDistrictById(id: string) {
   return districts.find((d) => d.id === id);
