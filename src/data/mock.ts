@@ -6,6 +6,7 @@ import type {
   Note,
   Proposal,
 } from "@/types/models";
+import type { ProposingParty } from "@/types/database";
 
 export const districts: District[] = [
   {
@@ -92,6 +93,10 @@ export const negotiationsMock = [
 
 export function getNegotiationById(id: string) {
   return negotiationsMock.find((n) => n.id === id);
+}
+
+export function getNegotiationByBargainingUnitId(bargainingUnitId: string) {
+  return negotiationsMock.find((n) => n.bargainingUnitId === bargainingUnitId);
 }
 
 /** Sessions aligned with DB shape; link to negotiationsMock (not legacy `sessions`). */
@@ -252,6 +257,36 @@ export const proposals: Proposal[] = [
     createdAt: "2025-03-05T11:15:00.000Z",
   },
 ];
+
+const proposalsMockVersionLabels: (string | null)[] = [
+  "Opening pass",
+  null,
+  null,
+  "TA draft",
+];
+
+const proposalsMockProposingParties: ProposingParty[] = [
+  "union",
+  "union",
+  "union",
+  "employer",
+];
+
+/** Negotiation-scoped proposals for list UI; mirrors DB shape. */
+export const proposalsMockForUi = proposals.map((p, i) => {
+  const neg = getNegotiationByBargainingUnitId(p.bargainingUnitId);
+  return {
+    id: p.id,
+    negotiationId: neg?.id ?? "neg-1",
+    title: p.title,
+    category: p.category,
+    status: p.status,
+    summary: p.summary,
+    versionLabel: proposalsMockVersionLabels[i] ?? null,
+    proposingParty: proposalsMockProposingParties[i] ?? "union",
+    submittedAt: p.status === "draft" ? null : p.createdAt,
+  };
+});
 
 export const notes: Note[] = [
   {
