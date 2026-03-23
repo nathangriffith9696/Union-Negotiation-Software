@@ -54,6 +54,7 @@ type SessionItemVM = {
   scheduledAt: string;
   status: SessionStatus;
   location: string | null;
+  summary: string | null;
 };
 
 type ProposalItemVM = {
@@ -153,6 +154,7 @@ function buildMockDetail(negotiationId: string): {
       scheduledAt: s.scheduledAt,
       status: s.status,
       location: s.location,
+      summary: s.summary,
     }))
     .sort(
       (a, b) =>
@@ -223,6 +225,7 @@ type SessionQueryRow = {
   scheduled_at: string;
   status: SessionStatus;
   location: string | null;
+  summary: string | null;
 };
 
 function mapSessionQueryRows(rows: SessionQueryRow[]): SessionItemVM[] {
@@ -233,7 +236,54 @@ function mapSessionQueryRows(rows: SessionQueryRow[]): SessionItemVM[] {
     scheduledAt: row.scheduled_at,
     status: row.status,
     location: row.location,
+    summary: row.summary,
   }));
+}
+
+function nextSessionNumberFromList(list: SessionItemVM[]): number {
+  return list.reduce((max, s) => Math.max(max, s.sessionNumber), 0) + 1;
+}
+
+/** After insert, if the list was not refreshed, still suggest a number above the one just saved. */
+function nextSessionNumberAfterCreate(
+  refreshedRows: SessionItemVM[] | null,
+  staleList: SessionItemVM[],
+  insertedNumber: number
+): number {
+  if (refreshedRows) {
+    return nextSessionNumberFromList(refreshedRows);
+  }
+  return (
+    Math.max(
+      staleList.reduce((m, s) => Math.max(m, s.sessionNumber), 0),
+      insertedNumber
+    ) + 1
+  );
+}
+
+/** Maps DB / PostgREST errors to short, actionable copy for the form. */
+function friendlySessionInsertError(
+  err: { message: string; code?: string },
+  sessionNumber: number
+): string {
+  const msg = err.message.toLowerCase();
+  const code = err.code ?? "";
+
+  if (
+    code === "23505" ||
+    (msg.includes("unique") &&
+      (msg.includes("session_number") ||
+        msg.includes("negotiation_session") ||
+        msg.includes("sessions_negotiation")))
+  ) {
+    return `Session number ${sessionNumber} is already used for this negotiation. Enter a different session number (each number must be unique per negotiation).`;
+  }
+
+  if (msg.includes("foreign key") || msg.includes("negotiation_id")) {
+    return "This negotiation could not be found. Go back to the list and open the negotiation again.";
+  }
+
+  return err.message.trim() || "Could not create the session. Please try again.";
 }
 
 function EmptySectionCard({ message }: { message: string }) {
@@ -273,17 +323,23 @@ export default function NegotiationDetailPage() {
     string | null
   >(null);
 
-  const loadSessions = useCallback(async (): Promise<{ error: string | null }> => {
-    if (!isSupabaseConfigured()) return { error: null };
+  const loadSessions = useCallback(async (): Promise<{
+    error: string | null;
+    rows: SessionItemVM[] | null;
+  }> => {
+    if (!isSupabaseConfigured()) return { error: null, rows: null };
     const supabase = createSupabaseClient();
     const { data, error } = await supabase
       .from("sessions")
-      .select("id, title, session_number, scheduled_at, status, location")
+      .select(
+        "id, title, session_number, scheduled_at, status, location, summary"
+      )
       .eq("negotiation_id", id)
       .order("scheduled_at", { ascending: false });
-    if (error) return { error: error.message };
-    setSessions(mapSessionQueryRows((data ?? []) as SessionQueryRow[]));
-    return { error: null };
+    if (error) return { error: error.message, rows: null };
+    const mapped = mapSessionQueryRows((data ?? []) as SessionQueryRow[]);
+    setSessions(mapped);
+    return { error: null, rows: mapped };
   }, [id]);
 
   useEffect(() => {
@@ -352,7 +408,7 @@ export default function NegotiationDetailPage() {
           supabase
             .from("sessions")
             .select(
-              "id, title, session_number, scheduled_at, status, location"
+              "id, title, session_number, scheduled_at, status, location, summary"
             )
             .eq("negotiation_id", id)
             .order("scheduled_at", { ascending: false }),
@@ -450,17 +506,26 @@ export default function NegotiationDetailPage() {
     };
   }, [id]);
 
-  function openNewSessionModal() {
-    const nextNum =
-      sessions.reduce((max, s) => Math.max(max, s.sessionNumber), 0) + 1;
-    setNewSessionNumber(nextNum);
+  function resetNewSessionFormToNewEntry(nextNumber: number) {
     setNewSessionTitle("");
     setNewSessionScheduledAt("");
     setNewSessionLocation("");
     setNewSessionStatus("scheduled");
     setNewSessionSummary("");
     setNewSessionError(null);
+    setNewSessionNumber(nextNumber);
+  }
+
+  function openNewSessionModal() {
+    setSessionsRefreshError(null);
+    resetNewSessionFormToNewEntry(nextSessionNumberFromList(sessions));
     setSessionModalOpen(true);
+  }
+
+  function closeSessionModal() {
+    if (newSessionSaving) return;
+    setSessionModalOpen(false);
+    resetNewSessionFormToNewEntry(nextSessionNumberFromList(sessions));
   }
 
   async function handleCreateSession(e: FormEvent) {
@@ -469,26 +534,29 @@ export default function NegotiationDetailPage() {
 
     const title = newSessionTitle.trim();
     if (!title) {
-      setNewSessionError("Title is required.");
+      setNewSessionError("Enter a short title for this session (for example, “Economic package — opening”).");
       return;
     }
     if (!newSessionScheduledAt.trim()) {
-      setNewSessionError("Scheduled date and time are required.");
+      setNewSessionError("Choose when this session is scheduled using the date and time fields.");
       return;
     }
     const num = Number(newSessionNumber);
     if (!Number.isInteger(num) || num < 1) {
-      setNewSessionError("Session number must be a positive whole number.");
+      setNewSessionError(
+        "Session number must be a whole number of 1 or higher. Each negotiation uses its own sequence (1, 2, 3…)."
+      );
       return;
     }
 
-    let scheduledIso: string;
-    try {
-      scheduledIso = new Date(newSessionScheduledAt).toISOString();
-    } catch {
-      setNewSessionError("Invalid scheduled date.");
+    const scheduledMs = new Date(newSessionScheduledAt).getTime();
+    if (Number.isNaN(scheduledMs)) {
+      setNewSessionError(
+        "That date and time are not valid. Please pick a valid date and time."
+      );
       return;
     }
+    const scheduledIso = new Date(scheduledMs).toISOString();
 
     setNewSessionSaving(true);
     setNewSessionError(null);
@@ -514,21 +582,30 @@ export default function NegotiationDetailPage() {
         .insert(row as never);
 
       if (insertError) {
-        setNewSessionError(insertError.message);
+        setNewSessionError(
+          friendlySessionInsertError(insertError, num)
+        );
         return;
       }
 
       const refresh = await loadSessions();
       if (refresh.error) {
-        setSessionsRefreshError(refresh.error);
+        setSessionsRefreshError(
+          `Your session was saved, but the list could not be refreshed. Try reloading the page. Details: ${refresh.error}`
+        );
       } else {
         setSessionsRefreshError(null);
       }
 
+      resetNewSessionFormToNewEntry(
+        nextSessionNumberAfterCreate(refresh.rows, sessions, num)
+      );
       setSessionModalOpen(false);
     } catch (err) {
       setNewSessionError(
-        err instanceof Error ? err.message : "Something went wrong"
+        err instanceof Error
+          ? err.message.trim() || "Something went wrong. Please try again."
+          : "Something went wrong. Please try again."
       );
     } finally {
       setNewSessionSaving(false);
@@ -691,12 +768,7 @@ export default function NegotiationDetailPage() {
 
             {sessionsRefreshError ? (
               <Card className="mb-4 border-red-200 bg-red-50/80">
-                <p className="text-sm font-medium text-red-900">
-                  Session was created but the list could not be refreshed.
-                </p>
-                <p className="mt-2 text-sm text-red-800/90">
-                  {sessionsRefreshError}
-                </p>
+                <p className="text-sm text-red-800/95">{sessionsRefreshError}</p>
               </Card>
             ) : null}
 
@@ -720,8 +792,20 @@ export default function NegotiationDetailPage() {
                         {formatStatus(s.status)}
                       </span>
                     </div>
-                    <div className="mt-4 border-t border-slate-100 pt-3 text-sm text-slate-600">
-                      Scheduled {formatDate(s.scheduledAt)}
+                    <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
+                      {s.summary?.trim() ? (
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Summary
+                          </p>
+                          <p className="mt-1.5 text-sm leading-relaxed text-slate-700">
+                            {s.summary.trim()}
+                          </p>
+                        </div>
+                      ) : null}
+                      <p className="text-sm text-slate-600">
+                        Scheduled {formatDate(s.scheduledAt)}
+                      </p>
                     </div>
                   </Card>
                 ))}
@@ -810,9 +894,7 @@ export default function NegotiationDetailPage() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="new-session-dialog-title"
-          onClick={() => {
-            if (!newSessionSaving) setSessionModalOpen(false);
-          }}
+          onClick={() => closeSessionModal()}
         >
           <div
             className="w-full max-w-lg"
@@ -958,9 +1040,7 @@ export default function NegotiationDetailPage() {
                 <button
                   type="button"
                   disabled={newSessionSaving}
-                  onClick={() => {
-                    if (!newSessionSaving) setSessionModalOpen(false);
-                  }}
+                  onClick={() => closeSessionModal()}
                   className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
                 >
                   Cancel
