@@ -22,6 +22,29 @@ type HeadedBlock = { heading: string; plain: string };
 /** Minimum heading similarity (0–1) to pair sections after exact key matches. */
 const HEADING_FUZZY_THRESHOLD = 0.82;
 
+const STRIKE_TAGS = new Set(["s", "strike", "del"]);
+
+/**
+ * Plain text for comparison: like visible text, but entire &lt;s&gt;, &lt;strike&gt;,
+ * and &lt;del&gt; subtrees are skipped so struck language behaves as removed in diffs.
+ */
+function plainTextExcludingStrike(el: HTMLElement): string {
+  let out = "";
+  function walk(node: Node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      out += node.textContent ?? "";
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const elem = node as Element;
+    const tag = elem.tagName.toLowerCase();
+    if (STRIKE_TAGS.has(tag)) return;
+    for (const c of elem.childNodes) walk(c);
+  }
+  for (const c of el.childNodes) walk(c);
+  return out.replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+}
+
 function countWords(s: string): number {
   const t = s.trim();
   if (!t) return 0;
@@ -52,7 +75,8 @@ function analyzeParts(parts: Change[]): {
 
 /**
  * Split saved contract HTML into sections by top-level h1–h3. Plain text per
- * section uses block innerText (same basis as the word-level diff).
+ * section skips &lt;s&gt;, &lt;strike&gt;, and &lt;del&gt; so struck text counts
+ * as removed in downstream diffs; headings use the same rule for matching labels.
  */
 export function buildContractSections(html: string): ContractSection[] {
   if (typeof document === "undefined") {
@@ -76,7 +100,7 @@ export function buildContractSections(html: string): ContractSection[] {
 
   const children = Array.from(wrap.children);
   if (children.length === 0) {
-    const t = wrap.textContent?.replace(/\u00a0/g, " ").trim() ?? "";
+    const t = plainTextExcludingStrike(wrap);
     if (t) return [{ heading: null, plain: t }];
     return [];
   }
@@ -85,17 +109,16 @@ export function buildContractSections(html: string): ContractSection[] {
     const tag = el.tagName.toLowerCase();
     if (tag === "h1" || tag === "h2" || tag === "h3") {
       pushCurrent();
+      const hText = plainTextExcludingStrike(el as HTMLElement);
       current = {
-        heading: el.textContent?.trim() || null,
+        heading: hText.length > 0 ? hText : null,
         plain: "",
       };
     } else {
       if (!current) {
         current = { heading: null, plain: "" };
       }
-      const t = ((el as HTMLElement).innerText || "")
-        .replace(/\u00a0/g, " ")
-        .trim();
+      const t = plainTextExcludingStrike(el as HTMLElement);
       if (t) {
         current.plain = current.plain ? `${current.plain}\n\n${t}` : t;
       }

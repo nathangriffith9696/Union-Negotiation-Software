@@ -184,6 +184,62 @@ describe("buildSectionDiffRows", () => {
       "Grievance Procedure (removed)",
     ]);
   });
+
+  it("treats manual <s> markup as removed language vs an unstuck prior version", () => {
+    const prev = contractHtml(undefined, [
+      { heading: "Wages", body: "Pay is weekly on Friday." },
+    ]);
+    const next = contractHtml(undefined, [
+      { heading: "Wages", body: "Pay is <s>weekly</s> on Friday." },
+    ]);
+    const row = buildSectionDiffRows(prev, next).find(
+      (r) => r.headingLabel === "Wages"
+    )!;
+    expect(row.removedWords).toBeGreaterThan(0);
+    expect(row.addedWords).toBe(0);
+    expect(
+      row.parts.some((p) => p.removed && /weekly/i.test(p.value))
+    ).toBe(true);
+  });
+
+  it("matches identical body when the same text is struck in both versions", () => {
+    const body = "Pay is <s>weekly</s> on Friday.";
+    const prev = contractHtml(undefined, [{ heading: "Wages", body }]);
+    const next = contractHtml(undefined, [{ heading: "Wages", body }]);
+    const row = buildSectionDiffRows(prev, next).find(
+      (r) => r.headingLabel === "Wages"
+    )!;
+    expect(row.hasChange).toBe(false);
+  });
+
+  it("treats <del> like strike for comparison", () => {
+    const prev = contractHtml(undefined, [
+      { heading: "Hours", body: "Keep remove keep." },
+    ]);
+    const next = contractHtml(undefined, [
+      { heading: "Hours", body: "Keep <del>remove</del> keep." },
+    ]);
+    const row = buildSectionDiffRows(prev, next).find(
+      (r) => r.headingLabel === "Hours"
+    )!;
+    expect(row.removedWords).toBeGreaterThan(0);
+  });
+
+  it("treats clearing strike markup as added language", () => {
+    const prev = contractHtml(undefined, [
+      { heading: "Wages", body: "Pay is <s>weekly</s> on Friday." },
+    ]);
+    const next = contractHtml(undefined, [
+      { heading: "Wages", body: "Pay is weekly on Friday." },
+    ]);
+    const row = buildSectionDiffRows(prev, next).find(
+      (r) => r.headingLabel === "Wages"
+    )!;
+    expect(row.addedWords).toBeGreaterThan(0);
+    expect(
+      row.parts.some((p) => p.added && /weekly/i.test(p.value))
+    ).toBe(true);
+  });
 });
 
 describe("sumChangeTotals", () => {

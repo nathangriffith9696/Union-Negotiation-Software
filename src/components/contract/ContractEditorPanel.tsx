@@ -11,6 +11,7 @@ import { getNegotiationById } from "@/data/mock";
 import {
   buildSectionDiffRows,
   sumChangeTotals,
+  type SectionDiffRow,
 } from "@/lib/contract-compare";
 import { formatDate } from "@/lib/format";
 import {
@@ -152,6 +153,39 @@ function friendlyContractInsertError(err: {
   );
 }
 
+const PROPOSAL_CANDIDATE_SNIPPET_MAX = 200;
+
+function proposalCandidateChangeType(
+  row: SectionDiffRow
+): "Added language" | "Removed language" | "Mixed changes" {
+  const hasAdd = row.addedWords > 0;
+  const hasRem = row.removedWords > 0;
+  if (hasAdd && !hasRem) return "Added language";
+  if (hasRem && !hasAdd) return "Removed language";
+  return "Mixed changes";
+}
+
+function proposalCandidateSnippet(row: SectionDiffRow): string {
+  let raw = "";
+  for (const p of row.parts) {
+    if (!p.added && !p.removed) continue;
+    const v = p.value;
+    if (!raw) {
+      raw = v;
+      continue;
+    }
+    const needsSpace =
+      raw.length > 0 &&
+      !/\s$/.test(raw) &&
+      v.length > 0 &&
+      !/^\s/.test(v);
+    raw += (needsSpace ? " " : "") + v;
+  }
+  const collapsed = raw.replace(/\s+/g, " ").trim();
+  if (collapsed.length <= PROPOSAL_CANDIDATE_SNIPPET_MAX) return collapsed;
+  return `${collapsed.slice(0, PROPOSAL_CANDIDATE_SNIPPET_MAX - 1).trimEnd()}…`;
+}
+
 function ContractCompareView({
   previousHtml,
   selectedHtml,
@@ -228,6 +262,68 @@ function ContractCompareView({
         )}
       </div>
 
+      {changedRows.length > 0 ? (
+        <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm ring-1 ring-slate-900/[0.03]">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+            Draft proposal candidates
+          </p>
+          <p className="mt-1 text-[11px] leading-snug text-slate-500">
+            Read-only summaries from changed sections. Nothing is saved as a
+            formal proposal.
+          </p>
+          <ul className="mt-3 max-h-[min(40vh,18rem)] space-y-3 overflow-y-auto border-t border-slate-100 pt-3">
+            {changedRows.map((row) => {
+              const changeType = proposalCandidateChangeType(row);
+              const snippet = proposalCandidateSnippet(row);
+              const typePillClass =
+                changeType === "Added language"
+                  ? "border-emerald-300/90 bg-emerald-50 text-emerald-900"
+                  : changeType === "Removed language"
+                    ? "border-rose-300/90 bg-rose-50 text-rose-900"
+                    : "border-slate-300 bg-slate-50 text-slate-800";
+              return (
+                <li
+                  key={`proposal-candidate-${row.index}`}
+                  className="rounded-lg border border-slate-200 bg-slate-50/70 p-3 shadow-sm"
+                >
+                  <p className="text-sm font-semibold leading-snug text-slate-900">
+                    {row.headingLabel}
+                  </p>
+                  <p className="mt-2">
+                    <span
+                      className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${typePillClass}`}
+                    >
+                      {changeType}
+                    </span>
+                  </p>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-600">
+                    {snippet.length > 0 ? (
+                      <span className="line-clamp-4">{snippet}</span>
+                    ) : (
+                      <span className="italic text-slate-500">
+                        No short snippet (e.g. whitespace-only or structural
+                        tweak).
+                      </span>
+                    )}
+                  </p>
+                  <p className="mt-2 text-xs text-slate-600">
+                    <span className="font-medium text-emerald-800">
+                      +{row.addedWords} words added
+                    </span>
+                    <span className="mx-1.5 text-slate-300" aria-hidden>
+                      ·
+                    </span>
+                    <span className="font-medium text-rose-800">
+                      −{row.removedWords} words removed
+                    </span>
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
+
       <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm leading-relaxed shadow-sm">
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
           Full redline by section
@@ -235,9 +331,10 @@ function ContractCompareView({
         <p className="mb-3 flex flex-wrap gap-x-4 gap-y-2 text-[11px] leading-snug text-slate-500">
           <span>
             Sections are matched by heading text (including close renames and
-            reordering), then diffed as plain text. Preamble before the first
-            heading is still compared on its own. Inline strike and formatting
-            stay in the editor and preview only.
+            reordering), then diffed as plain text. Text inside &lt;s&gt;,
+            &lt;strike&gt;, or &lt;del&gt; is omitted from that plain text so it
+            appears as removed language here. Bold, italics, and strike styling
+            still show fully in the editor and preview.
           </span>
         </p>
         <p className="mb-3 flex flex-wrap gap-4 text-xs font-medium text-slate-600">
@@ -1118,9 +1215,10 @@ export function ContractEditorPanel({
       </div>
 
       <p className="mt-4 text-xs text-slate-500">
-        Redlines pair sections by heading (with fuzzy matching), then plain
-        text per section. Later work can tie diffs to formal proposals and
-        finer-grained track changes.
+        Redlines pair sections by heading (with fuzzy matching), then compare
+        plain text per section (strike/del markup counts as deleted language).
+        Later work can tie diffs to formal proposals and finer-grained track
+        changes.
       </p>
     </>
   );
