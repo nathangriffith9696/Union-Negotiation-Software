@@ -2,13 +2,16 @@
 
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { diffWordsWithSpace } from "diff";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Editor } from "@tiptap/core";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getNegotiationById } from "@/data/mock";
+import {
+  buildSectionDiffRows,
+  sumChangeTotals,
+} from "@/lib/contract-compare";
 import { formatDate } from "@/lib/format";
 import {
   createSupabaseClient,
@@ -65,11 +68,61 @@ function writeMockVersions(negotiationId: string, versions: MockVersion[]) {
   );
 }
 
-function htmlToPlainForDiff(html: string): string {
-  if (typeof document === "undefined") return "";
+type HeadingOutlineItem = {
+  index: number;
+  level: number;
+  text: string;
+};
+
+function extractHeadingsFromHtml(html: string): HeadingOutlineItem[] {
+  if (typeof document === "undefined" || !html.trim()) return [];
   const d = document.createElement("div");
   d.innerHTML = html;
-  return (d.innerText || "").replace(/\u00a0/g, " ").trim();
+  const heads = d.querySelectorAll("h1, h2, h3");
+  return Array.from(heads).map((el, index) => ({
+    index,
+    level: Number(el.tagName[1]),
+    text: el.textContent?.trim() || `Section ${index + 1}`,
+  }));
+}
+
+function extractHeadingsFromEditor(editor: Editor): HeadingOutlineItem[] {
+  const root = editor.view.dom as HTMLElement;
+  const heads = root.querySelectorAll("h1, h2, h3");
+  return Array.from(heads).map((el, index) => ({
+    index,
+    level: Number(el.tagName[1]),
+    text: el.textContent?.trim() || `Section ${index + 1}`,
+  }));
+}
+
+function scrollToHeadingInRoot(root: HTMLElement | null, index: number) {
+  if (!root) return;
+  const heads = root.querySelectorAll("h1, h2, h3");
+  const el = heads.item(index) as HTMLElement | null;
+  el?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+
+/** Maps to HTML <ol type>; null = decimal (1, 2, 3). TipTap OrderedList already supports `type`. */
+type ContractOrderedStyle = "decimal" | "alpha" | "roman";
+
+function applyContractOrderedListStyle(
+  editor: Editor,
+  style: ContractOrderedStyle
+) {
+  const typeAttr: string | null =
+    style === "decimal" ? null : style === "alpha" ? "a" : "i";
+
+  if (editor.isActive("orderedList")) {
+    editor.chain().focus().updateAttributes("orderedList", { type: typeAttr }).run();
+    return;
+  }
+
+  const chain = editor.chain().focus();
+  if (editor.isActive("bulletList")) {
+    chain.toggleBulletList();
+  }
+  chain.toggleOrderedList().updateAttributes("orderedList", { type: typeAttr }).run();
 }
 
 function friendlyContractInsertError(err: {
@@ -99,102 +152,296 @@ function friendlyContractInsertError(err: {
   );
 }
 
-function RedlineCompare({
-  previousPlain,
-  selectedPlain,
+function ContractCompareView({
+  previousHtml,
+  selectedHtml,
 }: {
-  previousPlain: string;
-  selectedPlain: string;
+  previousHtml: string;
+  selectedHtml: string;
 }) {
-  const parts = diffWordsWithSpace(previousPlain, selectedPlain);
+  const rows = useMemo(
+    () => buildSectionDiffRows(previousHtml, selectedHtml),
+    [previousHtml, selectedHtml]
+  );
+  const totals = useMemo(() => sumChangeTotals(rows), [rows]);
+  const changedRows = useMemo(
+    () => rows.filter((r) => r.hasChange),
+    [rows]
+  );
+
   return (
-    <div className="max-h-[min(60vh,28rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white p-3 text-sm leading-relaxed">
-      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-        Changes vs previous version
-      </p>
-      <p className="mb-3 flex flex-wrap gap-3 text-xs text-slate-600">
-        <span>
-          <span className="mr-1 inline-block h-2 w-2 rounded-sm bg-red-200 align-middle" />{" "}
-          Removed
-        </span>
-        <span>
-          <span className="mr-1 inline-block h-2 w-2 rounded-sm bg-emerald-200 align-middle" />{" "}
-          Added
-        </span>
-      </p>
-      <div className="text-slate-900">
-        {parts.map((part, i) => {
-          if (part.added) {
-            return (
-              <span
-                key={i}
-                className="rounded-sm bg-emerald-100/90 px-0.5 text-emerald-950"
-              >
-                {part.value}
+    <div className="space-y-3">
+      <div className="rounded-lg border border-slate-200 bg-slate-50/90 p-3 shadow-sm ring-1 ring-slate-900/[0.03]">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
+          Detected changes
+        </p>
+        {changedRows.length === 0 ? (
+          <p className="mt-2 text-sm text-slate-600">
+            No textual changes vs the previous saved version.
+          </p>
+        ) : (
+          <>
+            <p className="mt-2 text-sm text-slate-800">
+              <span className="font-medium text-slate-900">
+                {totals.sectionsWithChanges}
+              </span>{" "}
+              {totals.sectionsWithChanges === 1 ? "section" : "sections"} with
+              edits ·{" "}
+              <span className="font-medium text-emerald-800">
+                +{totals.addedWords} words
               </span>
-            );
-          }
-          if (part.removed) {
-            return (
-              <span
-                key={i}
-                className="rounded-sm bg-red-100/90 px-0.5 text-red-900 line-through decoration-red-600"
-              >
-                {part.value}
+              {" · "}
+              <span className="font-medium text-rose-800">
+                −{totals.removedWords} words
               </span>
-            );
-          }
-          return <span key={i}>{part.value}</span>;
-        })}
+              <span className="text-slate-500">
+                {" "}
+                (~{totals.addedChars} / ~{totals.removedChars} characters)
+              </span>
+            </p>
+            <ul className="mt-3 max-h-40 space-y-2 overflow-y-auto border-t border-slate-200/80 pt-3 sm:max-h-48">
+              {changedRows.map((r) => (
+                <li
+                  key={r.index}
+                  className="rounded-md border border-slate-100 bg-white/90 px-2.5 py-2 text-sm shadow-sm"
+                >
+                  <p className="font-medium leading-snug text-slate-900 line-clamp-2">
+                    {r.headingLabel}
+                  </p>
+                  <p className="mt-1 text-xs text-slate-600">
+                    <span className="font-medium text-emerald-800">
+                      +{r.addedWords} words
+                    </span>
+                    {" · "}
+                    <span className="font-medium text-rose-800">
+                      −{r.removedWords} words
+                    </span>
+                    <span className="text-slate-500">
+                      {" "}
+                      (~{r.addedChars} / ~{r.removedChars} chars)
+                    </span>
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </div>
+
+      <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm leading-relaxed shadow-sm">
+        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+          Full redline by section
+        </p>
+        <p className="mb-3 flex flex-wrap gap-x-4 gap-y-2 text-[11px] leading-snug text-slate-500">
+          <span>
+            Sections are matched by heading text (including close renames and
+            reordering), then diffed as plain text. Preamble before the first
+            heading is still compared on its own. Inline strike and formatting
+            stay in the editor and preview only.
+          </span>
+        </p>
+        <p className="mb-3 flex flex-wrap gap-4 text-xs font-medium text-slate-600">
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-sm border border-rose-300 bg-rose-100"
+              aria-hidden
+            />
+            Removed (struck)
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              className="inline-block h-2.5 w-2.5 rounded-sm border border-emerald-400 bg-emerald-100"
+              aria-hidden
+            />
+            Inserted language
+          </span>
+        </p>
+
+        <div className="max-h-[min(52vh,24rem)] space-y-5 overflow-y-auto pr-0.5">
+          {changedRows.length === 0 ? (
+            <p className="text-slate-600">Nothing to show in the diff.</p>
+          ) : (
+            changedRows.map((row) => (
+              <section
+                key={row.index}
+                className="border-b border-slate-100 pb-4 last:border-b-0 last:pb-0"
+              >
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-700">
+                  {row.headingLabel}
+                </h3>
+                <div className="whitespace-pre-wrap break-words text-slate-900">
+                  {row.parts.map((part, i) => {
+                    if (part.added) {
+                      return (
+                        <mark
+                          key={`${row.index}-a-${i}`}
+                          className="mx-0.5 inline rounded border border-emerald-400/90 bg-emerald-100 px-1 py-0.5 font-normal text-emerald-950 shadow-sm [text-decoration:none]"
+                        >
+                          {part.value}
+                        </mark>
+                      );
+                    }
+                    if (part.removed) {
+                      return (
+                        <span
+                          key={`${row.index}-r-${i}`}
+                          className="mx-0.5 inline rounded border border-rose-300 bg-rose-50 px-1 py-0.5 text-rose-950 line-through decoration-rose-700 decoration-2"
+                        >
+                          {part.value}
+                        </span>
+                      );
+                    }
+                    return <span key={`${row.index}-c-${i}`}>{part.value}</span>;
+                  })}
+                </div>
+              </section>
+            ))
+          )}
+        </div>
+      </div>
+
+      <p className="text-[11px] leading-snug text-slate-500">
+        New-only sections list first in the new document order, then
+        old-only sections as removed. Very different headings may not pair
+        automatically; duplicate titles are matched in order within each
+        version.
+      </p>
     </div>
   );
 }
 
 function Toolbar({ editor }: { editor: Editor }) {
-  const { bold, italic, h2, bulletList, orderedList, blockquote } =
-    useEditorState({
-      editor,
-      selector: (snap) => ({
-        bold: snap.editor.isActive("bold"),
-        italic: snap.editor.isActive("italic"),
-        h2: snap.editor.isActive("heading", { level: 2 }),
-        bulletList: snap.editor.isActive("bulletList"),
-        orderedList: snap.editor.isActive("orderedList"),
-        blockquote: snap.editor.isActive("blockquote"),
-      }),
-    });
+  const {
+    hasTextSelection,
+    bold,
+    italic,
+    strike,
+    h2,
+    bulletList,
+    orderedDecimal,
+    orderedAlpha,
+    orderedRoman,
+    blockquote,
+  } = useEditorState({
+    editor,
+    selector: (snap) => {
+      const ed = snap.editor;
+      if (!ed) {
+        return {
+          hasTextSelection: false,
+          bold: false,
+          italic: false,
+          strike: false,
+          h2: false,
+          bulletList: false,
+          orderedDecimal: false,
+          orderedAlpha: false,
+          orderedRoman: false,
+          blockquote: false,
+        };
+      }
+      const olType = ed.getAttributes("orderedList").type as
+        | string
+        | null
+        | undefined;
+      const inOl = ed.isActive("orderedList");
+      const isDecimal =
+        inOl &&
+        (olType == null ||
+          olType === "" ||
+          olType === "1" ||
+          olType === "decimal");
+      return {
+        hasTextSelection: !ed.state.selection.empty,
+        bold: ed.isActive("bold"),
+        italic: ed.isActive("italic"),
+        strike: ed.isActive("strike"),
+        h2: ed.isActive("heading", { level: 2 }),
+        bulletList: ed.isActive("bulletList"),
+        orderedDecimal: Boolean(isDecimal),
+        orderedAlpha: inOl && olType === "a",
+        orderedRoman: inOl && olType === "i",
+        blockquote: ed.isActive("blockquote"),
+      };
+    },
+  });
 
-  const btn =
-    "rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors disabled:opacity-40";
-  const idle = "bg-white text-slate-700 border border-slate-200 hover:bg-slate-50";
-  const on = "bg-slate-200 text-slate-900 border border-slate-300";
+  const blockBtn =
+    "rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors";
+  const blockIdle =
+    "border-slate-200 bg-white text-slate-700 hover:bg-slate-50";
+  const blockOn = "border-slate-300 bg-slate-200 text-slate-900";
+
+  const inlineBtn =
+    "rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-50 disabled:text-slate-400 disabled:hover:bg-slate-50 disabled:shadow-none";
+  const inlineIdle =
+    "border-slate-200 bg-white text-slate-700 hover:bg-slate-50";
+  const inlineOn =
+    "border-slate-300 bg-slate-200 text-slate-900 disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400";
+
+  const olSegBase =
+    "min-w-[2.75rem] border-0 border-r border-slate-200 px-2.5 py-1.5 text-center text-xs font-semibold tabular-nums transition-colors last:border-r-0";
+  const olSegIdle =
+    "bg-white text-slate-800 hover:bg-slate-100 active:bg-slate-200/80";
+  const olSegOn = "bg-slate-200 text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.08)]";
 
   return (
     <div
-      className="flex flex-wrap gap-1 border-b border-slate-200 bg-slate-50/90 px-2 py-2"
+      className="flex flex-wrap items-center gap-x-1.5 gap-y-2 border-b border-slate-200 bg-slate-50/90 px-2 py-2"
       role="toolbar"
       aria-label="Contract formatting"
     >
       <button
         type="button"
-        className={`${btn} ${bold ? on : idle}`}
+        className={`${inlineBtn} ${bold ? inlineOn : inlineIdle}`}
+        disabled={!hasTextSelection}
         onClick={() => editor.chain().focus().toggleBold().run()}
         aria-pressed={bold}
+        title={
+          hasTextSelection
+            ? "Bold"
+            : "Bold — select text in the contract to enable"
+        }
       >
         Bold
       </button>
       <button
         type="button"
-        className={`${btn} ${italic ? on : idle}`}
+        className={`${inlineBtn} ${italic ? inlineOn : inlineIdle}`}
+        disabled={!hasTextSelection}
         onClick={() => editor.chain().focus().toggleItalic().run()}
         aria-pressed={italic}
+        title={
+          hasTextSelection
+            ? "Italic"
+            : "Italic — select text in the contract to enable"
+        }
       >
         Italic
       </button>
       <button
         type="button"
-        className={`${btn} ${h2 ? on : idle}`}
+        className={`${inlineBtn} ${strike ? inlineOn : inlineIdle}`}
+        disabled={!hasTextSelection}
+        onClick={() => editor.chain().focus().toggleStrike().run()}
+        aria-pressed={strike}
+        title={
+          hasTextSelection
+            ? "Strikethrough"
+            : "Strikethrough — select text in the contract to enable"
+        }
+      >
+        Strike
+      </button>
+
+      <div
+        className="mx-0.5 hidden h-6 w-px shrink-0 bg-slate-200 sm:block"
+        aria-hidden
+      />
+
+      <button
+        type="button"
+        className={`${blockBtn} ${h2 ? blockOn : blockIdle}`}
         onClick={() =>
           editor.chain().focus().toggleHeading({ level: 2 }).run()
         }
@@ -204,23 +451,59 @@ function Toolbar({ editor }: { editor: Editor }) {
       </button>
       <button
         type="button"
-        className={`${btn} ${bulletList ? on : idle}`}
+        className={`${blockBtn} ${bulletList ? blockOn : blockIdle}`}
         onClick={() => editor.chain().focus().toggleBulletList().run()}
         aria-pressed={bulletList}
       >
         Bullets
       </button>
-      <button
-        type="button"
-        className={`${btn} ${orderedList ? on : idle}`}
-        onClick={() => editor.chain().focus().toggleOrderedList().run()}
-        aria-pressed={orderedList}
+
+      <div
+        className="inline-flex overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm ring-1 ring-slate-900/[0.04]"
+        role="group"
+        aria-label="Ordered list: 1-2-3, a-b-c, or roman i-ii-iii"
       >
-        Numbered
-      </button>
+        <button
+          type="button"
+          className={`${olSegBase} ${orderedDecimal ? olSegOn : olSegIdle}`}
+          onClick={() => applyContractOrderedListStyle(editor, "decimal")}
+          aria-pressed={orderedDecimal}
+          aria-label="Numbered ordered list, 1 2 3"
+          title="Numbered list (1, 2, 3)"
+        >
+          <span className="pointer-events-none font-mono text-[13px] leading-none tracking-tight">
+            1.
+          </span>
+        </button>
+        <button
+          type="button"
+          className={`${olSegBase} ${orderedAlpha ? olSegOn : olSegIdle}`}
+          onClick={() => applyContractOrderedListStyle(editor, "alpha")}
+          aria-pressed={orderedAlpha}
+          aria-label="Lettered ordered list, a b c"
+          title="Lettered list (a, b, c)"
+        >
+          <span className="pointer-events-none font-mono text-[13px] leading-none tracking-tight">
+            a.
+          </span>
+        </button>
+        <button
+          type="button"
+          className={`${olSegBase} ${orderedRoman ? olSegOn : olSegIdle}`}
+          onClick={() => applyContractOrderedListStyle(editor, "roman")}
+          aria-pressed={orderedRoman}
+          aria-label="Roman ordered list, i ii iii"
+          title="Roman list (i, ii, iii)"
+        >
+          <span className="pointer-events-none font-mono text-[13px] leading-none tracking-tight">
+            i.
+          </span>
+        </button>
+      </div>
+
       <button
         type="button"
-        className={`${btn} ${blockquote ? on : idle}`}
+        className={`${blockBtn} ${blockquote ? blockOn : blockIdle}`}
         onClick={() => editor.chain().focus().toggleBlockquote().run()}
         aria-pressed={blockquote}
       >
@@ -228,7 +511,7 @@ function Toolbar({ editor }: { editor: Editor }) {
       </button>
       <button
         type="button"
-        className={btn + " " + idle}
+        className={`${blockBtn} ${blockIdle}`}
         onClick={() => editor.chain().focus().setHorizontalRule().run()}
       >
         Rule
@@ -271,6 +554,7 @@ export function ContractEditorPanel({
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
 
   const lastAppliedRevision = useRef<number>(-1);
+  const previewContentRef = useRef<HTMLDivElement | null>(null);
 
   const loadData = useCallback(async () => {
     setLoadState({ kind: "loading" });
@@ -382,6 +666,50 @@ export function ContractEditorPanel({
     lastAppliedRevision.current = loadState.contentRevision;
   }, [editor, loadState]);
 
+  const selectedVersion =
+    loadState.kind === "ready" && selectedVersionNumber !== null
+      ? loadState.versions.find(
+          (v) => v.version_number === selectedVersionNumber
+        ) ?? null
+      : null;
+
+  const previousVersion =
+    loadState.kind === "ready" &&
+    selectedVersion &&
+    selectedVersion.version_number > 1
+      ? loadState.versions.find(
+          (v) => v.version_number === selectedVersion.version_number - 1
+        ) ?? null
+      : null;
+
+  const outlineTargetsPreview =
+    selectedVersion !== null && sidePanelMode === "preview";
+
+  const previewOutline = useMemo(() => {
+    if (!outlineTargetsPreview || !selectedVersion) return [];
+    return extractHeadingsFromHtml(selectedVersion.body_html);
+  }, [outlineTargetsPreview, selectedVersion]);
+
+  const editorOutlineLive = useEditorState({
+    editor,
+    selector: ({ editor: ed }) => (ed ? extractHeadingsFromEditor(ed) : []),
+  });
+
+  const outlineItems: HeadingOutlineItem[] = outlineTargetsPreview
+    ? previewOutline
+    : (editorOutlineLive ?? []);
+
+  function handleOutlineNavigate(index: number) {
+    if (outlineTargetsPreview) {
+      scrollToHeadingInRoot(previewContentRef.current, index);
+      return;
+    }
+    if (editor) {
+      scrollToHeadingInRoot(editor.view.dom as HTMLElement, index);
+      editor.chain().focus().run();
+    }
+  }
+
   async function handleSaveNewVersion() {
     if (!editor || loadState.kind !== "ready") return;
     setSaveError(null);
@@ -415,6 +743,10 @@ export function ContractEditorPanel({
             : prev
         );
         setLoadedIntoEditorVersion(null);
+        if (nextVersion >= 2) {
+          setSelectedVersionNumber(nextVersion);
+          setSidePanelMode("compare");
+        }
         setSaveSuccess(
           `Saved version ${nextVersion} (stored locally in this browser).`
         );
@@ -448,6 +780,10 @@ export function ContractEditorPanel({
         };
       });
       setLoadedIntoEditorVersion(null);
+      if (nextVersion >= 2) {
+        setSelectedVersionNumber(nextVersion);
+        setSidePanelMode("compare");
+      }
       setSaveSuccess(
         `Saved version ${nextVersion} at ${formatDate(new Date().toISOString())}.`
       );
@@ -539,24 +875,6 @@ export function ContractEditorPanel({
 
   const { title, latestVersionNumber, versions } = loadState;
 
-  const selectedVersion =
-    selectedVersionNumber === null
-      ? null
-      : versions.find((v) => v.version_number === selectedVersionNumber) ??
-        null;
-
-  const previousVersion =
-    selectedVersion && selectedVersion.version_number > 1
-      ? versions.find(
-          (v) => v.version_number === selectedVersion.version_number - 1
-        ) ?? null
-      : null;
-
-  const previousPlain =
-    previousVersion != null ? htmlToPlainForDiff(previousVersion.body_html) : "";
-  const selectedPlain =
-    selectedVersion != null ? htmlToPlainForDiff(selectedVersion.body_html) : "";
-
   return (
     <>
       <p className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
@@ -588,8 +906,43 @@ export function ContractEditorPanel({
       ) : null}
 
       <div className="flex flex-col gap-6 xl:flex-row xl:items-start">
-        <div className="min-w-0 flex-1 space-y-4">
-          <Card className="overflow-hidden p-0">
+        <div className="flex min-w-0 flex-1 flex-col gap-4 lg:flex-row lg:items-start">
+          <Card className="h-fit w-full shrink-0 lg:sticky lg:top-4 lg:max-h-[min(85vh,40rem)] lg:w-52 lg:overflow-hidden xl:w-56">
+            <h2 className="text-sm font-semibold text-slate-900">
+              Articles &amp; sections
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              {outlineTargetsPreview && selectedVersion
+                ? `Headings from version ${selectedVersion.version_number} preview`
+                : "Headings in your working copy"}
+            </p>
+            {outlineItems.length === 0 ? (
+              <p className="mt-3 text-sm text-slate-600">
+                No headings yet. Use{" "}
+                <span className="font-medium text-slate-800">Heading</span> in
+                the toolbar for articles and sections.
+              </p>
+            ) : (
+              <ul className="mt-3 max-h-60 space-y-0.5 overflow-y-auto border-t border-slate-100 pt-3 lg:max-h-[min(70vh,32rem)]">
+                {outlineItems.map((h) => (
+                  <li key={`${outlineTargetsPreview ? "p" : "e"}-${h.index}`}>
+                    <button
+                      type="button"
+                      onClick={() => handleOutlineNavigate(h.index)}
+                      title={h.text}
+                      style={{ paddingLeft: `${(h.level - 1) * 10 + 4}px` }}
+                      className="w-full rounded-md py-1.5 pr-1 text-left text-xs leading-snug text-slate-700 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                    >
+                      <span className="line-clamp-3">{h.text}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <div className="min-w-0 flex-1 space-y-4">
+            <Card className="p-0">
             <div className="border-b border-slate-100 px-4 py-3 sm:flex sm:items-center sm:justify-between sm:gap-4">
               <div>
                 <p className="text-sm font-medium text-slate-900">
@@ -633,7 +986,8 @@ export function ContractEditorPanel({
               {editor ? <Toolbar editor={editor} /> : null}
               <EditorContent editor={editor} />
             </div>
-          </Card>
+            </Card>
+          </div>
         </div>
 
         <div className="w-full shrink-0 space-y-4 xl:w-80">
@@ -730,7 +1084,8 @@ export function ContractEditorPanel({
                     Read-only preview
                   </p>
                   <div
-                    className="max-h-[min(60vh,28rem)] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/40 p-4 text-sm leading-relaxed text-slate-800 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:text-slate-600 [&_h1]:mt-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold [&_li]:my-0.5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
+                    ref={previewContentRef}
+                    className="contract-editor-rich-preview max-h-[min(60vh,28rem)] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/40 p-4 text-sm leading-relaxed text-slate-800 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:text-slate-600 [&_h1]:mt-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold [&_p]:my-2"
                     dangerouslySetInnerHTML={{
                       __html: selectedVersion.body_html,
                     }}
@@ -738,9 +1093,9 @@ export function ContractEditorPanel({
                 </div>
               ) : previousVersion ? (
                 <div className="mt-4">
-                  <RedlineCompare
-                    previousPlain={previousPlain}
-                    selectedPlain={selectedPlain}
+                  <ContractCompareView
+                    previousHtml={previousVersion.body_html}
+                    selectedHtml={selectedVersion.body_html}
                   />
                 </div>
               ) : (
@@ -763,8 +1118,9 @@ export function ContractEditorPanel({
       </div>
 
       <p className="mt-4 text-xs text-slate-500">
-        Redlines use plain text extracted from the saved HTML (MVP). Later work
-        can tie diffs to formal proposals and finer-grained track changes.
+        Redlines pair sections by heading (with fuzzy matching), then plain
+        text per section. Later work can tie diffs to formal proposals and
+        finer-grained track changes.
       </p>
     </>
   );

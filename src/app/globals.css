@@ -19,7 +19,8 @@ body {
 /* Tiptap / ProseMirror — negotiation contract editor (scoped) */
 .negotiation-contract-editor .ProseMirror {
   min-height: min(50vh, 28rem);
-  padding: 1rem 1.25rem;
+  /* Extra inline start room so outside list markers sit beside text, not clipped */
+  padding: 1rem 1.25rem 1rem 1.75rem;
   outline: none;
   font-size: 0.9375rem;
   line-height: 1.6;
@@ -54,10 +55,137 @@ body {
   font-size: 1.05rem;
 }
 
+/* Lists: override Tailwind preflight (ul/ol { list-style: none }) */
 .negotiation-contract-editor .ProseMirror ul,
 .negotiation-contract-editor .ProseMirror ol {
   margin: 0.5em 0;
-  padding-left: 1.5rem;
+  padding-left: 1.75rem;
+  list-style-position: outside;
+}
+
+.negotiation-contract-editor .ProseMirror ul {
+  list-style-type: disc;
+}
+
+.negotiation-contract-editor .ProseMirror ol {
+  list-style-type: decimal;
+}
+
+/* HTML <ol type="…"> from TipTap */
+.negotiation-contract-editor .ProseMirror ol[type="a"] {
+  list-style-type: lower-alpha;
+}
+
+.negotiation-contract-editor .ProseMirror ol[type="A"] {
+  list-style-type: upper-alpha;
+}
+
+.negotiation-contract-editor .ProseMirror ol[type="i"] {
+  list-style-type: lower-roman;
+}
+
+.negotiation-contract-editor .ProseMirror ol[type="I"] {
+  list-style-type: upper-roman;
+}
+
+.negotiation-contract-editor .ProseMirror li {
+  display: list-item;
+  margin: 0.15em 0;
+  padding-left: 0.25rem;
+}
+
+.negotiation-contract-editor .ProseMirror li > ul,
+.negotiation-contract-editor .ProseMirror li > ol {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.negotiation-contract-editor .ProseMirror ul ul {
+  list-style-type: circle;
+}
+
+.negotiation-contract-editor .ProseMirror ul ul ul {
+  list-style-type: square;
+}
+
+/* Nested ordered lists without explicit type — bargaining-style sub-steps */
+.negotiation-contract-editor .ProseMirror ol ol:not([type]) {
+  list-style-type: lower-alpha;
+}
+
+.negotiation-contract-editor .ProseMirror ol ol ol:not([type]) {
+  list-style-type: lower-roman;
+}
+
+/* Version preview HTML — same list behavior as editor (preflight-safe) */
+.contract-editor-rich-preview ul,
+.contract-editor-rich-preview ol {
+  margin: 0.5em 0;
+  padding-left: 1.75rem;
+  list-style-position: outside;
+}
+
+.contract-editor-rich-preview ul {
+  list-style-type: disc;
+}
+
+.contract-editor-rich-preview ol {
+  list-style-type: decimal;
+}
+
+.contract-editor-rich-preview ol[type="a"] {
+  list-style-type: lower-alpha;
+}
+
+.contract-editor-rich-preview ol[type="A"] {
+  list-style-type: upper-alpha;
+}
+
+.contract-editor-rich-preview ol[type="i"] {
+  list-style-type: lower-roman;
+}
+
+.contract-editor-rich-preview ol[type="I"] {
+  list-style-type: upper-roman;
+}
+
+.contract-editor-rich-preview li {
+  display: list-item;
+  margin: 0.15em 0;
+  padding-left: 0.25rem;
+}
+
+.contract-editor-rich-preview li > ul,
+.contract-editor-rich-preview li > ol {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.contract-editor-rich-preview ul ul {
+  list-style-type: circle;
+}
+
+.contract-editor-rich-preview ul ul ul {
+  list-style-type: square;
+}
+
+.contract-editor-rich-preview ol ol:not([type]) {
+  list-style-type: lower-alpha;
+}
+
+.contract-editor-rich-preview ol ol ol:not([type]) {
+  list-style-type: lower-roman;
+}
+
+/* Strikethrough (TipTap Strike → <s>); compare view is plain-text diff */
+.negotiation-contract-editor .ProseMirror s,
+.negotiation-contract-editor .ProseMirror strike,
+.negotiation-contract-editor .ProseMirror del,
+.contract-editor-rich-preview s,
+.contract-editor-rich-preview strike,
+.contract-editor-rich-preview del {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
 }
 
 .negotiation-contract-editor .ProseMirror blockquote {
