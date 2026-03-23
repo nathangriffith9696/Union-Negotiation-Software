@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState } from "react";
 import {
   ListErrorCard,
   ListLoadingCard,
@@ -197,13 +197,15 @@ function buildMockDetail(negotiationId: string): {
   return { negotiation, sessions, proposals, notes, documents };
 }
 
-function SectionTitle({ children }: { children: ReactNode }) {
-  return (
-    <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-500">
-      {children}
-    </h2>
-  );
-}
+const WORKSPACE_TABS = [
+  { id: "summary", label: "Summary" },
+  { id: "sessions", label: "Sessions" },
+  { id: "proposals", label: "Proposals" },
+  { id: "notes", label: "Notes" },
+  { id: "documents", label: "Documents" },
+] as const;
+
+type WorkspaceTabId = (typeof WORKSPACE_TABS)[number]["id"];
 
 function EmptySectionCard({ message }: { message: string }) {
   return (
@@ -226,6 +228,11 @@ export default function NegotiationDetailPage() {
   const [proposals, setProposals] = useState<ProposalItemVM[]>([]);
   const [notes, setNotes] = useState<NoteItemVM[]>([]);
   const [documents, setDocuments] = useState<DocumentItemVM[]>([]);
+  const [activeTab, setActiveTab] = useState<WorkspaceTabId>("summary");
+
+  useEffect(() => {
+    setActiveTab("summary");
+  }, [id]);
 
   useEffect(() => {
     if (!id) {
@@ -453,161 +460,194 @@ export default function NegotiationDetailPage() {
         description={`${n.bargainingUnitName} · ${n.localName} · ${n.districtName}`}
       />
 
-      <Card className="mb-10">
-        <dl className="grid gap-3 text-sm sm:grid-cols-2">
-            <div>
-              <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Status
-              </dt>
-              <dd className="mt-1">
-                <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                  {formatStatus(n.status)}
-                </span>
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Bargaining unit
-              </dt>
-              <dd className="mt-1 text-slate-700">{n.bargainingUnitName}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Local
-              </dt>
-              <dd className="mt-1 text-slate-700">{n.localName}</dd>
-            </div>
-            <div className="sm:col-span-2">
-              <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                District
-              </dt>
-              <dd className="mt-1 text-slate-700">{n.districtName}</dd>
-            </div>
-            <div>
-              <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Start date
-              </dt>
-              <dd className="mt-1 text-slate-700">
-                {formatOptionalDate(n.startedOn) ?? "—"}
-              </dd>
-            </div>
-            <div>
-              <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                Target effective date
-              </dt>
-              <dd className="mt-1 text-slate-700">
-                {formatOptionalDate(n.targetContractEffectiveDate) ?? "—"}
-              </dd>
-            </div>
-        </dl>
-      </Card>
+      <nav
+        className="mb-6 flex gap-1 overflow-x-auto border-b border-slate-200 pb-px [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+        aria-label="Negotiation workspace"
+        role="tablist"
+      >
+        {WORKSPACE_TABS.map((tab) => {
+          const selected = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              id={`negotiation-tab-${tab.id}`}
+              aria-selected={selected}
+              aria-controls={`negotiation-panel-${tab.id}`}
+              tabIndex={selected ? 0 : -1}
+              onClick={() => setActiveTab(tab.id)}
+              className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
+                selected
+                  ? "border-slate-900 text-slate-900"
+                  : "border-transparent text-slate-500 hover:text-slate-800"
+              }`}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </nav>
 
-      <section className="mb-10">
-        <SectionTitle>Sessions</SectionTitle>
-        {sessions.length === 0 ? (
-          <EmptySectionCard message="No sessions for this negotiation yet." />
-        ) : (
-          <div className="space-y-4">
-            {sessions.map((s) => (
-              <Card key={s.id}>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h3 className="text-lg font-semibold text-slate-900">
-                      {s.title}
-                    </h3>
-                    <p className="mt-1 text-sm text-slate-600">
-                      Session {s.sessionNumber}
-                      {s.location?.trim() ? ` · ${s.location}` : ""}
-                    </p>
+      <div
+        role="tabpanel"
+        id={`negotiation-panel-${activeTab}`}
+        aria-labelledby={`negotiation-tab-${activeTab}`}
+      >
+        {activeTab === "summary" ? (
+          <Card>
+            <dl className="grid gap-3 text-sm sm:grid-cols-2">
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Status
+                </dt>
+                <dd className="mt-1">
+                  <span className="inline-flex rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                    {formatStatus(n.status)}
+                  </span>
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Bargaining unit
+                </dt>
+                <dd className="mt-1 text-slate-700">{n.bargainingUnitName}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Local
+                </dt>
+                <dd className="mt-1 text-slate-700">{n.localName}</dd>
+              </div>
+              <div className="sm:col-span-2">
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  District
+                </dt>
+                <dd className="mt-1 text-slate-700">{n.districtName}</dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Start date
+                </dt>
+                <dd className="mt-1 text-slate-700">
+                  {formatOptionalDate(n.startedOn) ?? "—"}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Target effective date
+                </dt>
+                <dd className="mt-1 text-slate-700">
+                  {formatOptionalDate(n.targetContractEffectiveDate) ?? "—"}
+                </dd>
+              </div>
+            </dl>
+          </Card>
+        ) : null}
+
+        {activeTab === "sessions" ? (
+          sessions.length === 0 ? (
+            <EmptySectionCard message="No sessions for this negotiation yet." />
+          ) : (
+            <div className="space-y-4">
+              {sessions.map((s) => (
+                <Card key={s.id}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold text-slate-900">
+                        {s.title}
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Session {s.sessionNumber}
+                        {s.location?.trim() ? ` · ${s.location}` : ""}
+                      </p>
+                    </div>
+                    <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                      {formatStatus(s.status)}
+                    </span>
                   </div>
-                  <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                    {formatStatus(s.status)}
-                  </span>
-                </div>
-                <div className="mt-4 border-t border-slate-100 pt-3 text-sm text-slate-600">
-                  Scheduled {formatDate(s.scheduledAt)}
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <section className="mb-10">
-        <SectionTitle>Proposals</SectionTitle>
-        {proposals.length === 0 ? (
-          <EmptySectionCard message="No proposals for this negotiation yet." />
-        ) : (
-          <div className="space-y-4">
-            {proposals.map((p) => (
-              <Card key={p.id}>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h3 className="text-lg font-semibold text-slate-900">
-                      {p.title}
-                    </h3>
-                    <p className="mt-1 text-sm text-slate-600">{p.category}</p>
+                  <div className="mt-4 border-t border-slate-100 pt-3 text-sm text-slate-600">
+                    Scheduled {formatDate(s.scheduledAt)}
                   </div>
-                  <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                    {formatStatus(p.status)}
-                  </span>
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </section>
+                </Card>
+              ))}
+            </div>
+          )
+        ) : null}
 
-      <section className="mb-10">
-        <SectionTitle>Notes</SectionTitle>
-        {notes.length === 0 ? (
-          <EmptySectionCard message="No notes for this negotiation yet." />
-        ) : (
-          <div className="space-y-4">
-            {notes.map((note) => (
-              <Card key={note.id}>
-                <p className="text-sm leading-relaxed text-slate-800">
-                  {note.body}
-                </p>
-                <div className="mt-4 border-t border-slate-100 pt-3 text-sm text-slate-600">
-                  <span className="font-medium text-slate-700">
-                    {note.author}
-                  </span>
-                  <span className="text-slate-400"> · </span>
-                  {formatStatus(note.noteType)}
-                  <span className="text-slate-400"> · </span>
-                  {formatDate(note.createdAt)}
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </section>
+        {activeTab === "proposals" ? (
+          proposals.length === 0 ? (
+            <EmptySectionCard message="No proposals for this negotiation yet." />
+          ) : (
+            <div className="space-y-4">
+              {proposals.map((p) => (
+                <Card key={p.id}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h3 className="text-lg font-semibold text-slate-900">
+                        {p.title}
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-600">{p.category}</p>
+                    </div>
+                    <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                      {formatStatus(p.status)}
+                    </span>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )
+        ) : null}
 
-      <section className="mb-10">
-        <SectionTitle>Documents</SectionTitle>
-        {documents.length === 0 ? (
-          <EmptySectionCard message="No documents for this negotiation yet." />
-        ) : (
-          <div className="space-y-4">
-            {documents.map((d) => (
-              <Card key={d.id}>
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                  <h3 className="text-lg font-semibold text-slate-900">
-                    {d.fileName}
-                  </h3>
-                  <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                    {formatStatus(d.documentType)}
-                  </span>
-                </div>
-                <div className="mt-4 border-t border-slate-100 pt-3 text-sm text-slate-600">
-                  Uploaded {formatDate(d.uploadedAt)}
-                </div>
-              </Card>
-            ))}
-          </div>
-        )}
-      </section>
+        {activeTab === "notes" ? (
+          notes.length === 0 ? (
+            <EmptySectionCard message="No notes for this negotiation yet." />
+          ) : (
+            <div className="space-y-4">
+              {notes.map((note) => (
+                <Card key={note.id}>
+                  <p className="text-sm leading-relaxed text-slate-800">
+                    {note.body}
+                  </p>
+                  <div className="mt-4 border-t border-slate-100 pt-3 text-sm text-slate-600">
+                    <span className="font-medium text-slate-700">
+                      {note.author}
+                    </span>
+                    <span className="text-slate-400"> · </span>
+                    {formatStatus(note.noteType)}
+                    <span className="text-slate-400"> · </span>
+                    {formatDate(note.createdAt)}
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )
+        ) : null}
+
+        {activeTab === "documents" ? (
+          documents.length === 0 ? (
+            <EmptySectionCard message="No documents for this negotiation yet." />
+          ) : (
+            <div className="space-y-4">
+              {documents.map((d) => (
+                <Card key={d.id}>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                    <h3 className="text-lg font-semibold text-slate-900">
+                      {d.fileName}
+                    </h3>
+                    <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                      {formatStatus(d.documentType)}
+                    </span>
+                  </div>
+                  <div className="mt-4 border-t border-slate-100 pt-3 text-sm text-slate-600">
+                    Uploaded {formatDate(d.uploadedAt)}
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )
+        ) : null}
+      </div>
     </>
   );
 }
