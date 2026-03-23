@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import {
   ListErrorCard,
   ListLoadingCard,
@@ -30,6 +30,7 @@ import type {
   NegotiationStatus,
   NoteType,
   ProposalStatus,
+  SessionInsert,
   SessionStatus,
 } from "@/types/database";
 
@@ -207,6 +208,34 @@ const WORKSPACE_TABS = [
 
 type WorkspaceTabId = (typeof WORKSPACE_TABS)[number]["id"];
 
+const SESSION_STATUS_OPTIONS: SessionStatus[] = [
+  "scheduled",
+  "in_progress",
+  "completed",
+  "cancelled",
+  "postponed",
+];
+
+type SessionQueryRow = {
+  id: string;
+  title: string;
+  session_number: number;
+  scheduled_at: string;
+  status: SessionStatus;
+  location: string | null;
+};
+
+function mapSessionQueryRows(rows: SessionQueryRow[]): SessionItemVM[] {
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    sessionNumber: row.session_number,
+    scheduledAt: row.scheduled_at,
+    status: row.status,
+    location: row.location,
+  }));
+}
+
 function EmptySectionCard({ message }: { message: string }) {
   return (
     <Card>
@@ -229,6 +258,33 @@ export default function NegotiationDetailPage() {
   const [notes, setNotes] = useState<NoteItemVM[]>([]);
   const [documents, setDocuments] = useState<DocumentItemVM[]>([]);
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>("summary");
+
+  const [sessionModalOpen, setSessionModalOpen] = useState(false);
+  const [newSessionTitle, setNewSessionTitle] = useState("");
+  const [newSessionNumber, setNewSessionNumber] = useState(1);
+  const [newSessionScheduledAt, setNewSessionScheduledAt] = useState("");
+  const [newSessionLocation, setNewSessionLocation] = useState("");
+  const [newSessionStatus, setNewSessionStatus] =
+    useState<SessionStatus>("scheduled");
+  const [newSessionSummary, setNewSessionSummary] = useState("");
+  const [newSessionSaving, setNewSessionSaving] = useState(false);
+  const [newSessionError, setNewSessionError] = useState<string | null>(null);
+  const [sessionsRefreshError, setSessionsRefreshError] = useState<
+    string | null
+  >(null);
+
+  const loadSessions = useCallback(async (): Promise<{ error: string | null }> => {
+    if (!isSupabaseConfigured()) return { error: null };
+    const supabase = createSupabaseClient();
+    const { data, error } = await supabase
+      .from("sessions")
+      .select("id, title, session_number, scheduled_at, status, location")
+      .eq("negotiation_id", id)
+      .order("scheduled_at", { ascending: false });
+    if (error) return { error: error.message };
+    setSessions(mapSessionQueryRows((data ?? []) as SessionQueryRow[]));
+    return { error: null };
+  }, [id]);
 
   useEffect(() => {
     setActiveTab("summary");
@@ -341,23 +397,8 @@ export default function NegotiationDetailPage() {
         const negRow = negRes.data as NegotiationDetailRow;
         setNegotiation(mapNegotiationRow(negRow));
 
-        type SessionRow = {
-          id: string;
-          title: string;
-          session_number: number;
-          scheduled_at: string;
-          status: SessionStatus;
-          location: string | null;
-        };
         setSessions(
-          ((sessRes.data ?? []) as SessionRow[]).map((row) => ({
-            id: row.id,
-            title: row.title,
-            sessionNumber: row.session_number,
-            scheduledAt: row.scheduled_at,
-            status: row.status,
-            location: row.location,
-          }))
+          mapSessionQueryRows((sessRes.data ?? []) as SessionQueryRow[])
         );
 
         setProposals((propRes.data ?? []) as ProposalItemVM[]);
@@ -408,6 +449,91 @@ export default function NegotiationDetailPage() {
       cancelled = true;
     };
   }, [id]);
+
+  function openNewSessionModal() {
+    const nextNum =
+      sessions.reduce((max, s) => Math.max(max, s.sessionNumber), 0) + 1;
+    setNewSessionNumber(nextNum);
+    setNewSessionTitle("");
+    setNewSessionScheduledAt("");
+    setNewSessionLocation("");
+    setNewSessionStatus("scheduled");
+    setNewSessionSummary("");
+    setNewSessionError(null);
+    setSessionModalOpen(true);
+  }
+
+  async function handleCreateSession(e: FormEvent) {
+    e.preventDefault();
+    if (!isSupabaseConfigured()) return;
+
+    const title = newSessionTitle.trim();
+    if (!title) {
+      setNewSessionError("Title is required.");
+      return;
+    }
+    if (!newSessionScheduledAt.trim()) {
+      setNewSessionError("Scheduled date and time are required.");
+      return;
+    }
+    const num = Number(newSessionNumber);
+    if (!Number.isInteger(num) || num < 1) {
+      setNewSessionError("Session number must be a positive whole number.");
+      return;
+    }
+
+    let scheduledIso: string;
+    try {
+      scheduledIso = new Date(newSessionScheduledAt).toISOString();
+    } catch {
+      setNewSessionError("Invalid scheduled date.");
+      return;
+    }
+
+    setNewSessionSaving(true);
+    setNewSessionError(null);
+
+    try {
+      const supabase = createSupabaseClient();
+      const row: SessionInsert = {
+        negotiation_id: id,
+        session_number: num,
+        title,
+        scheduled_at: scheduledIso,
+        location: newSessionLocation.trim() || null,
+        status: newSessionStatus,
+        summary: newSessionSummary.trim() || null,
+        format: "in_person",
+        next_session_date: null,
+        actual_start_at: null,
+        actual_end_at: null,
+      };
+      const { error: insertError } = await supabase
+        .from("sessions")
+        // Database generic does not expose Insert for this table to PostgREST typings.
+        .insert(row as never);
+
+      if (insertError) {
+        setNewSessionError(insertError.message);
+        return;
+      }
+
+      const refresh = await loadSessions();
+      if (refresh.error) {
+        setSessionsRefreshError(refresh.error);
+      } else {
+        setSessionsRefreshError(null);
+      }
+
+      setSessionModalOpen(false);
+    } catch (err) {
+      setNewSessionError(
+        err instanceof Error ? err.message : "Something went wrong"
+      );
+    } finally {
+      setNewSessionSaving(false);
+    }
+  }
 
   if (status === "loading") {
     return (
@@ -546,33 +672,62 @@ export default function NegotiationDetailPage() {
         ) : null}
 
         {activeTab === "sessions" ? (
-          sessions.length === 0 ? (
-            <EmptySectionCard message="No sessions for this negotiation yet." />
-          ) : (
-            <div className="space-y-4">
-              {sessions.map((s) => (
-                <Card key={s.id}>
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <h3 className="text-lg font-semibold text-slate-900">
-                        {s.title}
-                      </h3>
-                      <p className="mt-1 text-sm text-slate-600">
-                        Session {s.sessionNumber}
-                        {s.location?.trim() ? ` · ${s.location}` : ""}
-                      </p>
-                    </div>
-                    <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                      {formatStatus(s.status)}
-                    </span>
-                  </div>
-                  <div className="mt-4 border-t border-slate-100 pt-3 text-sm text-slate-600">
-                    Scheduled {formatDate(s.scheduledAt)}
-                  </div>
-                </Card>
-              ))}
+          <>
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {isSupabaseConfigured() ? (
+                <button
+                  type="button"
+                  onClick={openNewSessionModal}
+                  className="inline-flex w-fit items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+                >
+                  + New Session
+                </button>
+              ) : (
+                <p className="text-sm text-slate-500">
+                  Connect Supabase to add sessions from this workspace.
+                </p>
+              )}
             </div>
-          )
+
+            {sessionsRefreshError ? (
+              <Card className="mb-4 border-red-200 bg-red-50/80">
+                <p className="text-sm font-medium text-red-900">
+                  Session was created but the list could not be refreshed.
+                </p>
+                <p className="mt-2 text-sm text-red-800/90">
+                  {sessionsRefreshError}
+                </p>
+              </Card>
+            ) : null}
+
+            {sessions.length === 0 ? (
+              <EmptySectionCard message="No sessions for this negotiation yet." />
+            ) : (
+              <div className="space-y-4">
+                {sessions.map((s) => (
+                  <Card key={s.id}>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-slate-900">
+                          {s.title}
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-600">
+                          Session {s.sessionNumber}
+                          {s.location?.trim() ? ` · ${s.location}` : ""}
+                        </p>
+                      </div>
+                      <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                        {formatStatus(s.status)}
+                      </span>
+                    </div>
+                    <div className="mt-4 border-t border-slate-100 pt-3 text-sm text-slate-600">
+                      Scheduled {formatDate(s.scheduledAt)}
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </>
         ) : null}
 
         {activeTab === "proposals" ? (
@@ -648,6 +803,181 @@ export default function NegotiationDetailPage() {
           )
         ) : null}
       </div>
+
+      {sessionModalOpen && isSupabaseConfigured() ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-session-dialog-title"
+          onClick={() => {
+            if (!newSessionSaving) setSessionModalOpen(false);
+          }}
+        >
+          <div
+            className="w-full max-w-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Card className="relative max-h-[90vh] overflow-y-auto shadow-lg">
+            <h2
+              id="new-session-dialog-title"
+              className="text-lg font-semibold text-slate-900"
+            >
+              New session
+            </h2>
+            <p className="mt-1 text-sm text-slate-600">
+              Add a session to this negotiation.
+            </p>
+
+            <form className="mt-6 space-y-4" onSubmit={handleCreateSession}>
+              <div>
+                <label
+                  htmlFor="new-session-title"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Title
+                </label>
+                <input
+                  id="new-session-title"
+                  type="text"
+                  value={newSessionTitle}
+                  onChange={(e) => setNewSessionTitle(e.target.value)}
+                  required
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                  autoComplete="off"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="new-session-number"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Session number
+                </label>
+                <input
+                  id="new-session-number"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={newSessionNumber}
+                  onChange={(e) =>
+                    setNewSessionNumber(Number(e.target.value) || 1)
+                  }
+                  required
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="new-session-scheduled"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Scheduled (date and time)
+                </label>
+                <input
+                  id="new-session-scheduled"
+                  type="datetime-local"
+                  value={newSessionScheduledAt}
+                  onChange={(e) => setNewSessionScheduledAt(e.target.value)}
+                  required
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="new-session-location"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Location
+                </label>
+                <input
+                  id="new-session-location"
+                  type="text"
+                  value={newSessionLocation}
+                  onChange={(e) => setNewSessionLocation(e.target.value)}
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                  autoComplete="off"
+                />
+              </div>
+
+              <div>
+                <label
+                  htmlFor="new-session-status"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Status
+                </label>
+                <select
+                  id="new-session-status"
+                  value={newSessionStatus}
+                  onChange={(e) =>
+                    setNewSessionStatus(e.target.value as SessionStatus)
+                  }
+                  className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                >
+                  {SESSION_STATUS_OPTIONS.map((st) => (
+                    <option key={st} value={st}>
+                      {formatStatus(st)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="new-session-summary"
+                  className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                >
+                  Summary{" "}
+                  <span className="font-normal normal-case text-slate-400">
+                    (optional)
+                  </span>
+                </label>
+                <textarea
+                  id="new-session-summary"
+                  value={newSessionSummary}
+                  onChange={(e) => setNewSessionSummary(e.target.value)}
+                  rows={3}
+                  className="mt-1.5 w-full resize-y rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                />
+              </div>
+
+              {newSessionError ? (
+                <div
+                  className="rounded-lg border border-red-200 bg-red-50/80 px-3 py-2 text-sm text-red-800"
+                  role="alert"
+                >
+                  {newSessionError}
+                </div>
+              ) : null}
+
+              <div className="flex flex-wrap justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  disabled={newSessionSaving}
+                  onClick={() => {
+                    if (!newSessionSaving) setSessionModalOpen(false);
+                  }}
+                  className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={newSessionSaving}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+                >
+                  {newSessionSaving ? "Saving…" : "Create session"}
+                </button>
+              </div>
+            </form>
+            </Card>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }
