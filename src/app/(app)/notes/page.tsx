@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  type EntityListStatus,
+  ListEmptyCard,
+  ListErrorCard,
+  ListLoadingCard,
+} from "@/components/entity-list/EntityListStates";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -14,6 +20,10 @@ import {
 } from "@/data/mock";
 import { formatDate, formatStatus } from "@/lib/format";
 import {
+  labelsFromNegotiationsRelation,
+  optionalEmbedTitle,
+} from "@/lib/supabase-embeds";
+import {
   createSupabaseClient,
   isSupabaseConfigured,
 } from "@/lib/supabase";
@@ -26,7 +36,6 @@ type NoteCardVM = {
   noteType: NoteType;
   visibility: NoteVisibility;
   createdAt: string;
-  updatedAt: string;
   negotiationTitle: string;
   bargainingUnitName: string;
   localName: string;
@@ -42,41 +51,28 @@ type NoteWithRelationsRow = {
   note_type: NoteType;
   visibility: NoteVisibility;
   created_at: string;
-  updated_at: string;
   negotiations: {
     title: string;
-    bargaining_units: {
-      name: string;
-      locals: {
-        name: string;
-        districts: { name: string } | { name: string }[] | null;
-      } | null;
-    } | null;
+    bargaining_units:
+      | {
+          name: string;
+          locals: {
+            name: string;
+            districts: { name: string } | { name: string }[] | null;
+          } | null;
+        }
+      | {
+          name: string;
+          locals: {
+            name: string;
+            districts: { name: string } | { name: string }[] | null;
+          } | null;
+        }[]
+      | null;
   } | null;
   sessions: { title: string } | { title: string }[] | null;
   proposals: { title: string } | { title: string }[] | null;
 };
-
-function districtNameFromEmbed(
-  d: { name: string } | { name: string }[] | null | undefined
-): string {
-  if (!d) return "Unknown district";
-  if (Array.isArray(d)) {
-    return d[0]?.name ?? "Unknown district";
-  }
-  return d.name ?? "Unknown district";
-}
-
-function optionalEmbedTitle(
-  row: { title: string } | { title: string }[] | null | undefined
-): string | null {
-  if (!row) return null;
-  if (Array.isArray(row)) {
-    const t = row[0]?.title;
-    return t?.trim() ? t : null;
-  }
-  return row.title?.trim() ? row.title : null;
-}
 
 function buildMockRows(): NoteCardVM[] {
   return notesMockForUi.map((n) => {
@@ -99,7 +95,6 @@ function buildMockRows(): NoteCardVM[] {
       noteType: n.noteType,
       visibility: n.visibility,
       createdAt: n.createdAt,
-      updatedAt: n.updatedAt,
       negotiationTitle: neg?.title ?? "Unknown negotiation",
       bargainingUnitName: bu?.name ?? "Unknown unit",
       localName: local?.name ?? "Unknown local",
@@ -111,10 +106,7 @@ function buildMockRows(): NoteCardVM[] {
 }
 
 function mapSupabaseRow(row: NoteWithRelationsRow): NoteCardVM {
-  const neg = row.negotiations;
-  const bu = neg?.bargaining_units;
-  const loc = bu?.locals;
-
+  const chain = labelsFromNegotiationsRelation(row.negotiations);
   return {
     id: row.id,
     body: row.body,
@@ -122,11 +114,10 @@ function mapSupabaseRow(row: NoteWithRelationsRow): NoteCardVM {
     noteType: row.note_type,
     visibility: row.visibility,
     createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    negotiationTitle: neg?.title ?? "Unknown negotiation",
-    bargainingUnitName: bu?.name ?? "Unknown unit",
-    localName: loc?.name ?? "Unknown local",
-    districtName: loc ? districtNameFromEmbed(loc.districts) : "Unknown district",
+    negotiationTitle: chain.negotiationTitle,
+    bargainingUnitName: chain.bargainingUnitName,
+    localName: chain.localName,
+    districtName: chain.districtName,
     sessionTitle: optionalEmbedTitle(row.sessions),
     proposalTitle: optionalEmbedTitle(row.proposals),
   };
@@ -134,9 +125,9 @@ function mapSupabaseRow(row: NoteWithRelationsRow): NoteCardVM {
 
 export default function NotesPage() {
   const supabaseOn = isSupabaseConfigured();
-  const [status, setStatus] = useState<
-    "loading" | "ready" | "empty" | "error"
-  >(() => (supabaseOn ? "loading" : "ready"));
+  const [status, setStatus] = useState<EntityListStatus>(() =>
+    supabaseOn ? "loading" : "ready"
+  );
   const [rows, setRows] = useState<NoteCardVM[]>(() =>
     supabaseOn ? [] : buildMockRows()
   );
@@ -167,7 +158,6 @@ export default function NotesPage() {
             note_type,
             visibility,
             created_at,
-            updated_at,
             negotiations (
               title,
               bargaining_units (
@@ -218,29 +208,13 @@ export default function NotesPage() {
         description="Negotiation notes with optional session and proposal context."
       />
 
-      {status === "loading" ? (
-        <Card>
-          <p className="text-sm text-slate-600">Loading notes…</p>
-        </Card>
-      ) : null}
+      {status === "loading" ? <ListLoadingCard noun="notes" /> : null}
 
       {status === "error" && errorMessage ? (
-        <Card className="border-red-200 bg-red-50/80">
-          <p className="text-sm font-medium text-red-900">
-            Could not load notes
-          </p>
-          <p className="mt-2 text-sm text-red-800/90">{errorMessage}</p>
-        </Card>
+        <ListErrorCard noun="notes" message={errorMessage} />
       ) : null}
 
-      {status === "empty" ? (
-        <Card>
-          <p className="text-sm text-slate-600">
-            No notes yet. Add rows in Supabase or use mock data by leaving env
-            vars unset.
-          </p>
-        </Card>
-      ) : null}
+      {status === "empty" ? <ListEmptyCard noun="notes" /> : null}
 
       {status === "ready" ? (
         <div className="space-y-6">

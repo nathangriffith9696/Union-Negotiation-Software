@@ -1,6 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
+import {
+  type EntityListStatus,
+  ListEmptyCard,
+  ListErrorCard,
+  ListLoadingCard,
+} from "@/components/entity-list/EntityListStates";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -9,7 +16,8 @@ import {
   getLocalById,
   negotiationsMock,
 } from "@/data/mock";
-import { formatStatus } from "@/lib/format";
+import { formatOptionalDate, formatStatus } from "@/lib/format";
+import { labelsFromNegotiationsRelation } from "@/lib/supabase-embeds";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
@@ -35,24 +43,23 @@ type NegotiationWithRelationsRow = {
   negotiation_type: NegotiationType;
   started_on: string | null;
   target_contract_effective_date: string | null;
-  bargaining_units: {
-    name: string;
-    locals: {
-      name: string;
-      districts: { name: string } | { name: string }[] | null;
-    } | null;
-  } | null;
+  bargaining_units:
+    | {
+        name: string;
+        locals: {
+          name: string;
+          districts: { name: string } | { name: string }[] | null;
+        } | null;
+      }
+    | {
+        name: string;
+        locals: {
+          name: string;
+          districts: { name: string } | { name: string }[] | null;
+        } | null;
+      }[]
+    | null;
 };
-
-function districtNameFromEmbed(
-  d: { name: string } | { name: string }[] | null | undefined
-): string {
-  if (!d) return "Unknown district";
-  if (Array.isArray(d)) {
-    return d[0]?.name ?? "Unknown district";
-  }
-  return d.name ?? "Unknown district";
-}
 
 function buildMockRows(): NegotiationRowVM[] {
   return negotiationsMock.map((n) => {
@@ -74,8 +81,10 @@ function buildMockRows(): NegotiationRowVM[] {
 }
 
 function mapSupabaseRow(row: NegotiationWithRelationsRow): NegotiationRowVM {
-  const bu = row.bargaining_units;
-  const loc = bu?.locals;
+  const chain = labelsFromNegotiationsRelation({
+    title: row.title,
+    bargaining_units: row.bargaining_units,
+  });
   return {
     id: row.id,
     title: row.title,
@@ -83,29 +92,17 @@ function mapSupabaseRow(row: NegotiationWithRelationsRow): NegotiationRowVM {
     negotiationType: row.negotiation_type,
     startedOn: row.started_on,
     targetContractEffectiveDate: row.target_contract_effective_date,
-    bargainingUnitName: bu?.name ?? "Unknown unit",
-    localName: loc?.name ?? "Unknown local",
-    districtName: loc ? districtNameFromEmbed(loc.districts) : "Unknown district",
+    bargainingUnitName: chain.bargainingUnitName,
+    localName: chain.localName,
+    districtName: chain.districtName,
   };
-}
-
-function formatOptionalDate(value: string | null): string | null {
-  if (!value) return null;
-  const t = value.includes("T") ? value : `${value}T12:00:00.000Z`;
-  try {
-    return new Intl.DateTimeFormat("en-US", { dateStyle: "medium" }).format(
-      new Date(t)
-    );
-  } catch {
-    return value;
-  }
 }
 
 export default function NegotiationsPage() {
   const supabaseOn = isSupabaseConfigured();
-  const [status, setStatus] = useState<
-    "loading" | "ready" | "empty" | "error"
-  >(() => (supabaseOn ? "loading" : "ready"));
+  const [status, setStatus] = useState<EntityListStatus>(() =>
+    supabaseOn ? "loading" : "ready"
+  );
   const [rows, setRows] = useState<NegotiationRowVM[]>(() =>
     supabaseOn ? [] : buildMockRows()
   );
@@ -182,28 +179,14 @@ export default function NegotiationsPage() {
       />
 
       {status === "loading" ? (
-        <Card>
-          <p className="text-sm text-slate-600">Loading negotiations…</p>
-        </Card>
+        <ListLoadingCard noun="negotiations" />
       ) : null}
 
       {status === "error" && errorMessage ? (
-        <Card className="border-red-200 bg-red-50/80">
-          <p className="text-sm font-medium text-red-900">
-            Could not load negotiations
-          </p>
-          <p className="mt-2 text-sm text-red-800/90">{errorMessage}</p>
-        </Card>
+        <ListErrorCard noun="negotiations" message={errorMessage} />
       ) : null}
 
-      {status === "empty" ? (
-        <Card>
-          <p className="text-sm text-slate-600">
-            No negotiations yet. Add rows in Supabase or use mock data by leaving
-            env vars unset.
-          </p>
-        </Card>
-      ) : null}
+      {status === "empty" ? <ListEmptyCard noun="negotiations" /> : null}
 
       {status === "ready" ? (
         <div className="space-y-6">
@@ -211,9 +194,12 @@ export default function NegotiationsPage() {
             <Card key={n.id}>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-900">
+                  <Link
+                    href={`/negotiations/${encodeURIComponent(n.id)}`}
+                    className="block text-lg font-semibold text-slate-900 hover:text-slate-700 hover:underline"
+                  >
                     {n.title}
-                  </h2>
+                  </Link>
                   <p className="mt-1 text-sm text-slate-600">
                     {n.bargainingUnitName} · {n.localName} · {n.districtName}
                   </p>

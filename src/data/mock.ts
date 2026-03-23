@@ -363,7 +363,6 @@ export const notesMockForUi = notes.map((n, i) => {
     noteType: notesMockNoteTypes[i] ?? "general",
     visibility: notesMockVisibilities[i] ?? "team",
     createdAt: n.createdAt,
-    updatedAt: n.createdAt,
   };
 });
 

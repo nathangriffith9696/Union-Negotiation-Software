@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  type EntityListStatus,
+  ListEmptyCard,
+  ListErrorCard,
+  ListLoadingCard,
+} from "@/components/entity-list/EntityListStates";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -11,6 +17,7 @@ import {
   proposalsMockForUi,
 } from "@/data/mock";
 import { formatDate, formatStatus } from "@/lib/format";
+import { labelsFromNegotiationsRelation } from "@/lib/supabase-embeds";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
@@ -43,25 +50,24 @@ type ProposalWithRelationsRow = {
   submitted_at: string | null;
   negotiations: {
     title: string;
-    bargaining_units: {
-      name: string;
-      locals: {
-        name: string;
-        districts: { name: string } | { name: string }[] | null;
-      } | null;
-    } | null;
+    bargaining_units:
+      | {
+          name: string;
+          locals: {
+            name: string;
+            districts: { name: string } | { name: string }[] | null;
+          } | null;
+        }
+      | {
+          name: string;
+          locals: {
+            name: string;
+            districts: { name: string } | { name: string }[] | null;
+          } | null;
+        }[]
+      | null;
   } | null;
 };
-
-function districtNameFromEmbed(
-  d: { name: string } | { name: string }[] | null | undefined
-): string {
-  if (!d) return "Unknown district";
-  if (Array.isArray(d)) {
-    return d[0]?.name ?? "Unknown district";
-  }
-  return d.name ?? "Unknown district";
-}
 
 function buildMockRows(): ProposalCardVM[] {
   return proposalsMockForUi.map((p) => {
@@ -88,10 +94,7 @@ function buildMockRows(): ProposalCardVM[] {
 }
 
 function mapSupabaseRow(row: ProposalWithRelationsRow): ProposalCardVM {
-  const neg = row.negotiations;
-  const bu = neg?.bargaining_units;
-  const loc = bu?.locals;
-
+  const chain = labelsFromNegotiationsRelation(row.negotiations);
   return {
     id: row.id,
     title: row.title,
@@ -101,18 +104,18 @@ function mapSupabaseRow(row: ProposalWithRelationsRow): ProposalCardVM {
     versionLabel: row.version_label,
     proposingParty: row.proposing_party,
     submittedAt: row.submitted_at,
-    negotiationTitle: neg?.title ?? "Unknown negotiation",
-    bargainingUnitName: bu?.name ?? "Unknown unit",
-    localName: loc?.name ?? "Unknown local",
-    districtName: loc ? districtNameFromEmbed(loc.districts) : "Unknown district",
+    negotiationTitle: chain.negotiationTitle,
+    bargainingUnitName: chain.bargainingUnitName,
+    localName: chain.localName,
+    districtName: chain.districtName,
   };
 }
 
 export default function ProposalsPage() {
   const supabaseOn = isSupabaseConfigured();
-  const [status, setStatus] = useState<
-    "loading" | "ready" | "empty" | "error"
-  >(() => (supabaseOn ? "loading" : "ready"));
+  const [status, setStatus] = useState<EntityListStatus>(() =>
+    supabaseOn ? "loading" : "ready"
+  );
   const [rows, setRows] = useState<ProposalCardVM[]>(() =>
     supabaseOn ? [] : buildMockRows()
   );
@@ -193,29 +196,13 @@ export default function ProposalsPage() {
         description="Contract proposals by negotiation, unit, and district."
       />
 
-      {status === "loading" ? (
-        <Card>
-          <p className="text-sm text-slate-600">Loading proposals…</p>
-        </Card>
-      ) : null}
+      {status === "loading" ? <ListLoadingCard noun="proposals" /> : null}
 
       {status === "error" && errorMessage ? (
-        <Card className="border-red-200 bg-red-50/80">
-          <p className="text-sm font-medium text-red-900">
-            Could not load proposals
-          </p>
-          <p className="mt-2 text-sm text-red-800/90">{errorMessage}</p>
-        </Card>
+        <ListErrorCard noun="proposals" message={errorMessage} />
       ) : null}
 
-      {status === "empty" ? (
-        <Card>
-          <p className="text-sm text-slate-600">
-            No proposals yet. Add rows in Supabase or use mock data by leaving
-            env vars unset.
-          </p>
-        </Card>
-      ) : null}
+      {status === "empty" ? <ListEmptyCard noun="proposals" /> : null}
 
       {status === "ready" ? (
         <div className="space-y-6">

@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  type EntityListStatus,
+  ListEmptyCard,
+  ListErrorCard,
+  ListLoadingCard,
+} from "@/components/entity-list/EntityListStates";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -11,6 +17,7 @@ import {
   sessionsMockForUi,
 } from "@/data/mock";
 import { formatDate, formatStatus } from "@/lib/format";
+import { labelsFromNegotiationsRelation } from "@/lib/supabase-embeds";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
@@ -39,28 +46,26 @@ type SessionWithRelationsRow = {
   status: SessionStatus;
   location: string | null;
   summary: string | null;
-  next_session_date: string | null;
   negotiations: {
     title: string;
-    bargaining_units: {
-      name: string;
-      locals: {
-        name: string;
-        districts: { name: string } | { name: string }[] | null;
-      } | null;
-    } | null;
+    bargaining_units:
+      | {
+          name: string;
+          locals: {
+            name: string;
+            districts: { name: string } | { name: string }[] | null;
+          } | null;
+        }
+      | {
+          name: string;
+          locals: {
+            name: string;
+            districts: { name: string } | { name: string }[] | null;
+          } | null;
+        }[]
+      | null;
   } | null;
 };
-
-function districtNameFromEmbed(
-  d: { name: string } | { name: string }[] | null | undefined
-): string {
-  if (!d) return "Unknown district";
-  if (Array.isArray(d)) {
-    return d[0]?.name ?? "Unknown district";
-  }
-  return d.name ?? "Unknown district";
-}
 
 function buildMockRows(): SessionCardVM[] {
   return sessionsMockForUi.map((s) => {
@@ -86,10 +91,7 @@ function buildMockRows(): SessionCardVM[] {
 }
 
 function mapSupabaseRow(row: SessionWithRelationsRow): SessionCardVM {
-  const neg = row.negotiations;
-  const bu = neg?.bargaining_units;
-  const loc = bu?.locals;
-
+  const chain = labelsFromNegotiationsRelation(row.negotiations);
   return {
     id: row.id,
     title: row.title,
@@ -98,18 +100,18 @@ function mapSupabaseRow(row: SessionWithRelationsRow): SessionCardVM {
     status: row.status,
     location: row.location,
     summary: row.summary,
-    negotiationTitle: neg?.title ?? "Unknown negotiation",
-    bargainingUnitName: bu?.name ?? "Unknown unit",
-    localName: loc?.name ?? "Unknown local",
-    districtName: loc ? districtNameFromEmbed(loc.districts) : "Unknown district",
+    negotiationTitle: chain.negotiationTitle,
+    bargainingUnitName: chain.bargainingUnitName,
+    localName: chain.localName,
+    districtName: chain.districtName,
   };
 }
 
 export default function SessionsPage() {
   const supabaseOn = isSupabaseConfigured();
-  const [status, setStatus] = useState<
-    "loading" | "ready" | "empty" | "error"
-  >(() => (supabaseOn ? "loading" : "ready"));
+  const [status, setStatus] = useState<EntityListStatus>(() =>
+    supabaseOn ? "loading" : "ready"
+  );
   const [rows, setRows] = useState<SessionCardVM[]>(() =>
     supabaseOn ? [] : buildMockRows()
   );
@@ -141,7 +143,6 @@ export default function SessionsPage() {
             status,
             location,
             summary,
-            next_session_date,
             negotiations (
               title,
               bargaining_units (
@@ -190,29 +191,13 @@ export default function SessionsPage() {
         description="Scheduled and completed negotiation meetings."
       />
 
-      {status === "loading" ? (
-        <Card>
-          <p className="text-sm text-slate-600">Loading sessions…</p>
-        </Card>
-      ) : null}
+      {status === "loading" ? <ListLoadingCard noun="sessions" /> : null}
 
       {status === "error" && errorMessage ? (
-        <Card className="border-red-200 bg-red-50/80">
-          <p className="text-sm font-medium text-red-900">
-            Could not load sessions
-          </p>
-          <p className="mt-2 text-sm text-red-800/90">{errorMessage}</p>
-        </Card>
+        <ListErrorCard noun="sessions" message={errorMessage} />
       ) : null}
 
-      {status === "empty" ? (
-        <Card>
-          <p className="text-sm text-slate-600">
-            No sessions yet. Add rows in Supabase or use mock data by leaving env
-            vars unset.
-          </p>
-        </Card>
-      ) : null}
+      {status === "empty" ? <ListEmptyCard noun="sessions" /> : null}
 
       {status === "ready" ? (
         <div className="space-y-6">

@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  type EntityListStatus,
+  ListEmptyCard,
+  ListErrorCard,
+  ListLoadingCard,
+} from "@/components/entity-list/EntityListStates";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -12,7 +18,16 @@ import {
   proposals,
   sessions,
 } from "@/data/mock";
-import { formatDate, formatStatus } from "@/lib/format";
+import {
+  formatDate,
+  formatFileSize,
+  formatStatus,
+  normalizeByteSize,
+} from "@/lib/format";
+import {
+  labelsFromNegotiationsRelation,
+  optionalEmbedTitle,
+} from "@/lib/supabase-embeds";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
@@ -43,57 +58,26 @@ type DocumentWithRelationsRow = {
   uploaded_at: string;
   negotiations: {
     title: string;
-    bargaining_units: {
-      name: string;
-      locals: {
-        name: string;
-        districts: { name: string } | { name: string }[] | null;
-      } | null;
-    } | null;
+    bargaining_units:
+      | {
+          name: string;
+          locals: {
+            name: string;
+            districts: { name: string } | { name: string }[] | null;
+          } | null;
+        }
+      | {
+          name: string;
+          locals: {
+            name: string;
+            districts: { name: string } | { name: string }[] | null;
+          } | null;
+        }[]
+      | null;
   } | null;
   sessions: { title: string } | { title: string }[] | null;
   proposals: { title: string } | { title: string }[] | null;
 };
-
-function districtNameFromEmbed(
-  d: { name: string } | { name: string }[] | null | undefined
-): string {
-  if (!d) return "Unknown district";
-  if (Array.isArray(d)) {
-    return d[0]?.name ?? "Unknown district";
-  }
-  return d.name ?? "Unknown district";
-}
-
-function optionalEmbedTitle(
-  row: { title: string } | { title: string }[] | null | undefined
-): string | null {
-  if (!row) return null;
-  if (Array.isArray(row)) {
-    const t = row[0]?.title;
-    return t?.trim() ? t : null;
-  }
-  return row.title?.trim() ? row.title : null;
-}
-
-function normalizeByteSize(value: number | string): number {
-  const n = typeof value === "string" ? Number(value) : value;
-  return Number.isFinite(n) ? n : 0;
-}
-
-function formatFileSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return "—";
-  const units = ["B", "KB", "MB", "GB"];
-  let v = bytes;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i += 1;
-  }
-  const rounded =
-    i === 0 || v >= 100 ? Math.round(v) : Math.round(v * 10) / 10;
-  return `${rounded} ${units[i]}`;
-}
 
 function buildMockRows(): DocumentCardVM[] {
   return documentsMockForUi.map((d) => {
@@ -127,10 +111,7 @@ function buildMockRows(): DocumentCardVM[] {
 }
 
 function mapSupabaseRow(row: DocumentWithRelationsRow): DocumentCardVM {
-  const neg = row.negotiations;
-  const bu = neg?.bargaining_units;
-  const loc = bu?.locals;
-
+  const chain = labelsFromNegotiationsRelation(row.negotiations);
   return {
     id: row.id,
     fileName: row.file_name,
@@ -138,10 +119,10 @@ function mapSupabaseRow(row: DocumentWithRelationsRow): DocumentCardVM {
     mimeType: row.mime_type,
     byteSize: normalizeByteSize(row.byte_size),
     uploadedAt: row.uploaded_at,
-    negotiationTitle: neg?.title ?? "Unknown negotiation",
-    bargainingUnitName: bu?.name ?? "Unknown unit",
-    localName: loc?.name ?? "Unknown local",
-    districtName: loc ? districtNameFromEmbed(loc.districts) : "Unknown district",
+    negotiationTitle: chain.negotiationTitle,
+    bargainingUnitName: chain.bargainingUnitName,
+    localName: chain.localName,
+    districtName: chain.districtName,
     sessionTitle: optionalEmbedTitle(row.sessions),
     proposalTitle: optionalEmbedTitle(row.proposals),
   };
@@ -149,9 +130,9 @@ function mapSupabaseRow(row: DocumentWithRelationsRow): DocumentCardVM {
 
 export default function DocumentsPage() {
   const supabaseOn = isSupabaseConfigured();
-  const [status, setStatus] = useState<
-    "loading" | "ready" | "empty" | "error"
-  >(() => (supabaseOn ? "loading" : "ready"));
+  const [status, setStatus] = useState<EntityListStatus>(() =>
+    supabaseOn ? "loading" : "ready"
+  );
   const [rows, setRows] = useState<DocumentCardVM[]>(() =>
     supabaseOn ? [] : buildMockRows()
   );
@@ -232,29 +213,13 @@ export default function DocumentsPage() {
         description="Files linked to negotiations, with optional session or proposal context."
       />
 
-      {status === "loading" ? (
-        <Card>
-          <p className="text-sm text-slate-600">Loading documents…</p>
-        </Card>
-      ) : null}
+      {status === "loading" ? <ListLoadingCard noun="documents" /> : null}
 
       {status === "error" && errorMessage ? (
-        <Card className="border-red-200 bg-red-50/80">
-          <p className="text-sm font-medium text-red-900">
-            Could not load documents
-          </p>
-          <p className="mt-2 text-sm text-red-800/90">{errorMessage}</p>
-        </Card>
+        <ListErrorCard noun="documents" message={errorMessage} />
       ) : null}
 
-      {status === "empty" ? (
-        <Card>
-          <p className="text-sm text-slate-600">
-            No documents yet. Add rows in Supabase or use mock data by leaving
-            env vars unset.
-          </p>
-        </Card>
-      ) : null}
+      {status === "empty" ? <ListEmptyCard noun="documents" /> : null}
 
       {status === "ready" ? (
         <div className="space-y-6">

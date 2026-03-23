@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  type EntityListStatus,
+  ListEmptyCard,
+  ListErrorCard,
+  ListLoadingCard,
+} from "@/components/entity-list/EntityListStates";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -8,6 +14,7 @@ import {
   getDistrictById,
   locals as mockLocals,
 } from "@/data/mock";
+import { labelsFromLocalRelation } from "@/lib/supabase-embeds";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
@@ -27,21 +34,17 @@ type BargainingUnitWithRelationsRow = {
   name: string;
   description: string | null;
   employer_name: string;
-  locals: {
-    name: string;
-    districts: { name: string } | { name: string }[] | null;
-  } | null;
+  locals:
+    | {
+        name: string;
+        districts: { name: string } | { name: string }[] | null;
+      }
+    | {
+        name: string;
+        districts: { name: string } | { name: string }[] | null;
+      }[]
+    | null;
 };
-
-function districtNameFromEmbed(
-  d: { name: string } | { name: string }[] | null | undefined
-): string {
-  if (!d) return "Unknown district";
-  if (Array.isArray(d)) {
-    return d[0]?.name ?? "Unknown district";
-  }
-  return d.name ?? "Unknown district";
-}
 
 function buildMockRows(): UnitRowVM[] {
   return mockBargainingUnits.map((u) => {
@@ -59,11 +62,7 @@ function buildMockRows(): UnitRowVM[] {
 }
 
 function mapSupabaseRow(row: BargainingUnitWithRelationsRow): UnitRowVM {
-  const loc = row.locals;
-  const localName = loc?.name ?? "Unknown local";
-  const districtName = loc
-    ? districtNameFromEmbed(loc.districts)
-    : "Unknown district";
+  const { localName, districtName } = labelsFromLocalRelation(row.locals);
 
   return {
     id: row.id,
@@ -77,9 +76,9 @@ function mapSupabaseRow(row: BargainingUnitWithRelationsRow): UnitRowVM {
 
 export default function BargainingUnitsPage() {
   const supabaseOn = isSupabaseConfigured();
-  const [status, setStatus] = useState<
-    "loading" | "ready" | "empty" | "error"
-  >(() => (supabaseOn ? "loading" : "ready"));
+  const [status, setStatus] = useState<EntityListStatus>(() =>
+    supabaseOn ? "loading" : "ready"
+  );
   const [rows, setRows] = useState<UnitRowVM[]>(() =>
     supabaseOn ? [] : buildMockRows()
   );
@@ -151,27 +150,15 @@ export default function BargainingUnitsPage() {
       />
 
       {status === "loading" ? (
-        <Card>
-          <p className="text-sm text-slate-600">Loading bargaining units…</p>
-        </Card>
+        <ListLoadingCard noun="bargaining units" />
       ) : null}
 
       {status === "error" && errorMessage ? (
-        <Card className="border-red-200 bg-red-50/80">
-          <p className="text-sm font-medium text-red-900">
-            Could not load bargaining units
-          </p>
-          <p className="mt-2 text-sm text-red-800/90">{errorMessage}</p>
-        </Card>
+        <ListErrorCard noun="bargaining units" message={errorMessage} />
       ) : null}
 
       {status === "empty" ? (
-        <Card>
-          <p className="text-sm text-slate-600">
-            No bargaining units yet. Add rows in Supabase or use mock data by
-            leaving env vars unset.
-          </p>
-        </Card>
+        <ListEmptyCard noun="bargaining units" />
       ) : null}
 
       {status === "ready" ? (

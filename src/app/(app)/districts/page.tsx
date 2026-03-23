@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  type EntityListStatus,
+  ListEmptyCard,
+  ListErrorCard,
+  ListLoadingCard,
+} from "@/components/entity-list/EntityListStates";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { districts as mockDistricts, locals as mockLocals } from "@/data/mock";
@@ -69,9 +75,9 @@ function buildMockRows(): RowVM[] {
 
 export default function DistrictsPage() {
   const supabaseOn = isSupabaseConfigured();
-  const [status, setStatus] = useState<
-    "loading" | "ready" | "empty" | "error"
-  >(() => (supabaseOn ? "loading" : "ready"));
+  const [status, setStatus] = useState<EntityListStatus>(() =>
+    supabaseOn ? "loading" : "ready"
+  );
   const [rows, setRows] = useState<RowVM[]>(() =>
     supabaseOn ? [] : buildMockRows()
   );
@@ -156,29 +162,13 @@ export default function DistrictsPage() {
         description="Organizational districts and the locals chartered within each."
       />
 
-      {status === "loading" ? (
-        <Card>
-          <p className="text-sm text-slate-600">Loading districts…</p>
-        </Card>
-      ) : null}
+      {status === "loading" ? <ListLoadingCard noun="districts" /> : null}
 
       {status === "error" && errorMessage ? (
-        <Card className="border-red-200 bg-red-50/80">
-          <p className="text-sm font-medium text-red-900">
-            Could not load districts
-          </p>
-          <p className="mt-2 text-sm text-red-800/90">{errorMessage}</p>
-        </Card>
+        <ListErrorCard noun="districts" message={errorMessage} />
       ) : null}
 
-      {status === "empty" ? (
-        <Card>
-          <p className="text-sm text-slate-600">
-            No districts yet. Add rows in Supabase or use mock data by leaving
-            env vars unset.
-          </p>
-        </Card>
-      ) : null}
+      {status === "empty" ? <ListEmptyCard noun="districts" /> : null}
 
       {status === "ready" ? (
         <div className="grid gap-6 lg:grid-cols-2">

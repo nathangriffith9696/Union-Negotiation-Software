@@ -1,6 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import {
+  type EntityListStatus,
+  ListEmptyCard,
+  ListErrorCard,
+  ListLoadingCard,
+} from "@/components/entity-list/EntityListStates";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -8,6 +14,7 @@ import {
   getDistrictById,
   locals as mockLocals,
 } from "@/data/mock";
+import { districtNameFromEmbed } from "@/lib/supabase-embeds";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
@@ -74,16 +81,6 @@ function buildMockRows(): LocalRowVM[] {
   });
 }
 
-function districtNameFromEmbed(
-  d: LocalWithRelationsRow["districts"]
-): string {
-  if (!d) return "Unknown district";
-  if (Array.isArray(d)) {
-    return d[0]?.name ?? "Unknown district";
-  }
-  return d.name ?? "Unknown district";
-}
-
 function unitsFromEmbed(
   u: LocalWithRelationsRow["bargaining_units"]
 ): UnitVM[] {
@@ -101,9 +98,9 @@ function unitsFromEmbed(
 
 export default function LocalsPage() {
   const supabaseOn = isSupabaseConfigured();
-  const [status, setStatus] = useState<
-    "loading" | "ready" | "empty" | "error"
-  >(() => (supabaseOn ? "loading" : "ready"));
+  const [status, setStatus] = useState<EntityListStatus>(() =>
+    supabaseOn ? "loading" : "ready"
+  );
   const [rows, setRows] = useState<LocalRowVM[]>(() =>
     supabaseOn ? [] : buildMockRows()
   );
@@ -184,29 +181,13 @@ export default function LocalsPage() {
         description="Chartered locals, member counts, and associated bargaining units."
       />
 
-      {status === "loading" ? (
-        <Card>
-          <p className="text-sm text-slate-600">Loading locals…</p>
-        </Card>
-      ) : null}
+      {status === "loading" ? <ListLoadingCard noun="locals" /> : null}
 
       {status === "error" && errorMessage ? (
-        <Card className="border-red-200 bg-red-50/80">
-          <p className="text-sm font-medium text-red-900">
-            Could not load locals
-          </p>
-          <p className="mt-2 text-sm text-red-800/90">{errorMessage}</p>
-        </Card>
+        <ListErrorCard noun="locals" message={errorMessage} />
       ) : null}
 
-      {status === "empty" ? (
-        <Card>
-          <p className="text-sm text-slate-600">
-            No locals yet. Add rows in Supabase or use mock data by leaving env
-            vars unset.
-          </p>
-        </Card>
-      ) : null}
+      {status === "empty" ? <ListEmptyCard noun="locals" /> : null}
 
       {status === "ready" ? (
         <div className="space-y-6">
