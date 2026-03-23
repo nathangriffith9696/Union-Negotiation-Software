@@ -161,6 +161,15 @@ export type DocumentRow = {
   created_at: string;
 };
 
+/** Rich HTML body from the contract editor; one row per saved version per negotiation. */
+export type NegotiationContractVersionRow = {
+  id: string;
+  negotiation_id: string;
+  version_number: number;
+  body_html: string;
+  created_at: string;
+};
+
 /** Insert payloads (omit DB defaults where optional). */
 export type DistrictInsert = Omit<DistrictRow, "id" | "created_at"> &
   Partial<Pick<DistrictRow, "id" | "created_at">>;
@@ -217,6 +226,12 @@ export type DocumentInsert = Omit<
     Pick<DocumentRow, "id" | "created_at" | "uploaded_at" | "uploaded_by">
   >;
 
+export type NegotiationContractVersionInsert = Omit<
+  NegotiationContractVersionRow,
+  "id" | "created_at"
+> &
+  Partial<Pick<NegotiationContractVersionRow, "id" | "created_at">>;
+
 /** Partial updates by primary key. */
 export type DistrictUpdate = Partial<Omit<DistrictRow, "id" | "created_at">>;
 export type LocalUpdate = Partial<Omit<LocalRow, "id" | "created_at">>;
@@ -233,6 +248,10 @@ export type NoteUpdate = Partial<
 >;
 export type DocumentUpdate = Partial<
   Omit<DocumentRow, "id" | "created_at" | "uploaded_at">
+>;
+
+export type NegotiationContractVersionUpdate = Partial<
+  Omit<NegotiationContractVersionRow, "id" | "created_at">
 >;
 
 /** Composite PK (session_id, proposal_id) must not change; use delete + insert to relink. */
@@ -274,6 +293,11 @@ export type UnionNegotiationDatabase = {
         Row: DocumentRow;
         Insert: DocumentInsert;
         Update: DocumentUpdate;
+      };
+      negotiation_contract_versions: {
+        Row: NegotiationContractVersionRow;
+        Insert: NegotiationContractVersionInsert;
+        Update: NegotiationContractVersionUpdate;
       };
     };
   };

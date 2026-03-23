@@ -29,7 +29,9 @@ import type {
   DocumentType,
   NegotiationStatus,
   NoteType,
+  ProposalInsert,
   ProposalStatus,
+  ProposingParty,
   SessionInsert,
   SessionStatus,
 } from "@/types/database";
@@ -218,6 +220,22 @@ const SESSION_STATUS_OPTIONS: SessionStatus[] = [
   "postponed",
 ];
 
+const PROPOSAL_STATUS_OPTIONS: ProposalStatus[] = [
+  "draft",
+  "submitted",
+  "in_negotiation",
+  "tentative",
+  "withdrawn",
+  "settled",
+];
+
+const PROPOSING_PARTY_OPTIONS: ProposingParty[] = [
+  "union",
+  "employer",
+  "joint",
+  "other",
+];
+
 type SessionQueryRow = {
   id: string;
   title: string;
@@ -286,6 +304,55 @@ function friendlySessionInsertError(
   return err.message.trim() || "Could not create the session. Please try again.";
 }
 
+/** Maps DB / PostgREST errors for proposal insert to short, actionable copy. */
+function friendlyProposalInsertError(err: {
+  message: string;
+  code?: string;
+}): string {
+  const msg = err.message.toLowerCase();
+  const code = err.code ?? "";
+
+  if (code === "23505" || msg.includes("unique constraint")) {
+    return "A proposal with these details may already exist, or a uniqueness rule blocked the save. Change the title or version and try again.";
+  }
+
+  if (
+    msg.includes("proposals_status_check") ||
+    (msg.includes("status") &&
+      (msg.includes("check constraint") || msg.includes("violates check")))
+  ) {
+    return "Status must be one of: draft, submitted, in negotiation, tentative, withdrawn, or settled. Pick a value from the list.";
+  }
+
+  if (
+    msg.includes("proposals_proposing_party_check") ||
+    (msg.includes("proposing_party") && msg.includes("check"))
+  ) {
+    return "Proposing party must be union, employer, joint, or other. Pick a value from the list.";
+  }
+
+  if (
+    msg.includes("proposals_version_number_positive") ||
+    (msg.includes("version_number") && msg.includes("check"))
+  ) {
+    return "Version number must be a whole number of 1 or higher.";
+  }
+
+  if (
+    msg.includes("value too long") ||
+    msg.includes("character varying") ||
+    msg.includes("string_data_right_truncation")
+  ) {
+    return "One of the text fields is too long. Category allows up to 120 characters; version label up to 32.";
+  }
+
+  if (msg.includes("foreign key") || msg.includes("negotiation_id")) {
+    return "This negotiation could not be found. Go back to the list and open the negotiation again.";
+  }
+
+  return err.message.trim() || "Could not create the proposal. Please try again.";
+}
+
 function EmptySectionCard({ message }: { message: string }) {
   return (
     <Card>
@@ -323,6 +390,23 @@ export default function NegotiationDetailPage() {
     string | null
   >(null);
 
+  const [proposalModalOpen, setProposalModalOpen] = useState(false);
+  const [newProposalTitle, setNewProposalTitle] = useState("");
+  const [newProposalCategory, setNewProposalCategory] = useState("");
+  const [newProposalStatus, setNewProposalStatus] =
+    useState<ProposalStatus>("draft");
+  const [newProposalProposingParty, setNewProposalProposingParty] =
+    useState<ProposingParty>("union");
+  const [newProposalSubmittedAt, setNewProposalSubmittedAt] = useState("");
+  const [newProposalVersionNumber, setNewProposalVersionNumber] = useState(1);
+  const [newProposalVersionLabel, setNewProposalVersionLabel] = useState("");
+  const [newProposalSummary, setNewProposalSummary] = useState("");
+  const [newProposalSaving, setNewProposalSaving] = useState(false);
+  const [newProposalError, setNewProposalError] = useState<string | null>(null);
+  const [proposalsRefreshError, setProposalsRefreshError] = useState<
+    string | null
+  >(null);
+
   const loadSessions = useCallback(async (): Promise<{
     error: string | null;
     rows: SessionItemVM[] | null;
@@ -340,6 +424,23 @@ export default function NegotiationDetailPage() {
     const mapped = mapSessionQueryRows((data ?? []) as SessionQueryRow[]);
     setSessions(mapped);
     return { error: null, rows: mapped };
+  }, [id]);
+
+  const loadProposals = useCallback(async (): Promise<{
+    error: string | null;
+    rows: ProposalItemVM[] | null;
+  }> => {
+    if (!isSupabaseConfigured()) return { error: null, rows: null };
+    const supabase = createSupabaseClient();
+    const { data, error } = await supabase
+      .from("proposals")
+      .select("id, title, category, status")
+      .eq("negotiation_id", id)
+      .order("created_at", { ascending: false });
+    if (error) return { error: error.message, rows: null };
+    const rows = (data ?? []) as ProposalItemVM[];
+    setProposals(rows);
+    return { error: null, rows };
   }, [id]);
 
   useEffect(() => {
@@ -612,6 +713,129 @@ export default function NegotiationDetailPage() {
     }
   }
 
+  function resetNewProposalForm() {
+    setNewProposalTitle("");
+    setNewProposalCategory("");
+    setNewProposalStatus("draft");
+    setNewProposalProposingParty("union");
+    setNewProposalSubmittedAt("");
+    setNewProposalVersionNumber(1);
+    setNewProposalVersionLabel("");
+    setNewProposalSummary("");
+    setNewProposalError(null);
+  }
+
+  function openNewProposalModal() {
+    setProposalsRefreshError(null);
+    resetNewProposalForm();
+    setProposalModalOpen(true);
+  }
+
+  function closeProposalModal() {
+    if (newProposalSaving) return;
+    setProposalModalOpen(false);
+    resetNewProposalForm();
+  }
+
+  async function handleCreateProposal(e: FormEvent) {
+    e.preventDefault();
+    if (!isSupabaseConfigured()) return;
+
+    const title = newProposalTitle.trim();
+    if (!title) {
+      setNewProposalError(
+        "Enter a title for this proposal (for example, “Wage scale — year 1”)."
+      );
+      return;
+    }
+
+    const category = newProposalCategory.trim();
+    if (!category) {
+      setNewProposalError(
+        "Enter a category (for example, “economics”, “hours”, or “general”)."
+      );
+      return;
+    }
+    if (category.length > 120) {
+      setNewProposalError("Category must be 120 characters or fewer.");
+      return;
+    }
+
+    const versionNum = Number(newProposalVersionNumber);
+    if (!Number.isInteger(versionNum) || versionNum < 1) {
+      setNewProposalError(
+        "Version number must be a whole number of 1 or higher."
+      );
+      return;
+    }
+
+    const versionLabel = newProposalVersionLabel.trim();
+    if (versionLabel.length > 32) {
+      setNewProposalError("Version label must be 32 characters or fewer.");
+      return;
+    }
+
+    let submittedAtIso: string | null = null;
+    if (newProposalSubmittedAt.trim()) {
+      const submittedMs = new Date(newProposalSubmittedAt).getTime();
+      if (Number.isNaN(submittedMs)) {
+        setNewProposalError(
+          "Submitted date and time are not valid. Pick a valid date and time or clear the field."
+        );
+        return;
+      }
+      submittedAtIso = new Date(submittedMs).toISOString();
+    }
+
+    setNewProposalSaving(true);
+    setNewProposalError(null);
+
+    try {
+      const supabase = createSupabaseClient();
+      const row: ProposalInsert = {
+        negotiation_id: id,
+        prior_proposal_id: null,
+        title,
+        category,
+        status: newProposalStatus,
+        proposing_party: newProposalProposingParty,
+        submitted_at: submittedAtIso,
+        version_number: versionNum,
+        version_label: versionLabel || null,
+        summary: newProposalSummary.trim() || null,
+        submitted_by: null,
+      };
+      const { error: insertError } = await supabase
+        .from("proposals")
+        .insert(row as never);
+
+      if (insertError) {
+        setNewProposalError(friendlyProposalInsertError(insertError));
+        return;
+      }
+
+      const refresh = await loadProposals();
+      if (refresh.error) {
+        setProposalsRefreshError(
+          `Your proposal was saved, but the list could not be refreshed. Try reloading the page. Details: ${refresh.error}`
+        );
+      } else {
+        setProposalsRefreshError(null);
+      }
+
+      resetNewProposalForm();
+      setProposalModalOpen(false);
+    } catch (err) {
+      setNewProposalError(
+        err instanceof Error
+          ? err.message.trim() || "Something went wrong. Please try again."
+          : "Something went wrong. Please try again."
+      );
+    } finally {
+      setNewProposalSaving(false);
+    }
+  }
+
   if (status === "loading") {
     return (
       <>
@@ -650,12 +874,21 @@ export default function NegotiationDetailPage() {
 
   return (
     <>
-      <p className="mb-4 text-sm">
+      <p className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         <Link
           href="/negotiations"
           className="font-medium text-slate-700 underline-offset-2 hover:text-slate-900 hover:underline"
         >
           ← All negotiations
+        </Link>
+        <span className="hidden text-slate-300 sm:inline" aria-hidden>
+          |
+        </span>
+        <Link
+          href={`/negotiations/${id}/contract`}
+          className="font-medium text-slate-700 underline-offset-2 hover:text-slate-900 hover:underline"
+        >
+          Contract editor
         </Link>
       </p>
       <PageHeader
@@ -815,27 +1048,53 @@ export default function NegotiationDetailPage() {
         ) : null}
 
         {activeTab === "proposals" ? (
-          proposals.length === 0 ? (
-            <EmptySectionCard message="No proposals for this negotiation yet." />
-          ) : (
-            <div className="space-y-4">
-              {proposals.map((p) => (
-                <Card key={p.id}>
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <h3 className="text-lg font-semibold text-slate-900">
-                        {p.title}
-                      </h3>
-                      <p className="mt-1 text-sm text-slate-600">{p.category}</p>
-                    </div>
-                    <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                      {formatStatus(p.status)}
-                    </span>
-                  </div>
-                </Card>
-              ))}
+          <>
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              {isSupabaseConfigured() ? (
+                <button
+                  type="button"
+                  onClick={openNewProposalModal}
+                  className="inline-flex w-fit items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+                >
+                  + New Proposal
+                </button>
+              ) : (
+                <p className="text-sm text-slate-500">
+                  Connect Supabase to add proposals from this workspace.
+                </p>
+              )}
             </div>
-          )
+
+            {proposalsRefreshError ? (
+              <Card className="mb-4 border-red-200 bg-red-50/80">
+                <p className="text-sm text-red-800/95">{proposalsRefreshError}</p>
+              </Card>
+            ) : null}
+
+            {proposals.length === 0 ? (
+              <EmptySectionCard message="No proposals for this negotiation yet." />
+            ) : (
+              <div className="space-y-4">
+                {proposals.map((p) => (
+                  <Card key={p.id}>
+                    <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                      <div>
+                        <h3 className="text-lg font-semibold text-slate-900">
+                          {p.title}
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-600">
+                          {p.category}
+                        </p>
+                      </div>
+                      <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                        {formatStatus(p.status)}
+                      </span>
+                    </div>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </>
         ) : null}
 
         {activeTab === "notes" ? (
@@ -1054,6 +1313,228 @@ export default function NegotiationDetailPage() {
                 </button>
               </div>
             </form>
+            </Card>
+          </div>
+        </div>
+      ) : null}
+
+      {proposalModalOpen && isSupabaseConfigured() ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="new-proposal-dialog-title"
+          onClick={() => closeProposalModal()}
+        >
+          <div
+            className="w-full max-w-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <Card className="relative max-h-[90vh] overflow-y-auto shadow-lg">
+              <h2
+                id="new-proposal-dialog-title"
+                className="text-lg font-semibold text-slate-900"
+              >
+                New proposal
+              </h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Add a proposal to this negotiation.
+              </p>
+
+              <form className="mt-6 space-y-4" onSubmit={handleCreateProposal}>
+                <div>
+                  <label
+                    htmlFor="new-proposal-title"
+                    className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    Title
+                  </label>
+                  <input
+                    id="new-proposal-title"
+                    type="text"
+                    value={newProposalTitle}
+                    onChange={(e) => setNewProposalTitle(e.target.value)}
+                    required
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                    autoComplete="off"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="new-proposal-category"
+                    className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    Category
+                  </label>
+                  <input
+                    id="new-proposal-category"
+                    type="text"
+                    value={newProposalCategory}
+                    onChange={(e) => setNewProposalCategory(e.target.value)}
+                    required
+                    maxLength={120}
+                    placeholder="e.g. economics, hours, general"
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                    autoComplete="off"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="new-proposal-status"
+                    className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    Status
+                  </label>
+                  <select
+                    id="new-proposal-status"
+                    value={newProposalStatus}
+                    onChange={(e) =>
+                      setNewProposalStatus(e.target.value as ProposalStatus)
+                    }
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                  >
+                    {PROPOSAL_STATUS_OPTIONS.map((st) => (
+                      <option key={st} value={st}>
+                        {formatStatus(st)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="new-proposal-party"
+                    className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    Proposing party
+                  </label>
+                  <select
+                    id="new-proposal-party"
+                    value={newProposalProposingParty}
+                    onChange={(e) =>
+                      setNewProposalProposingParty(
+                        e.target.value as ProposingParty
+                      )
+                    }
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                  >
+                    {PROPOSING_PARTY_OPTIONS.map((party) => (
+                      <option key={party} value={party}>
+                        {formatStatus(party)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="new-proposal-submitted"
+                    className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    Submitted (date and time){" "}
+                    <span className="font-normal normal-case text-slate-400">
+                      (optional)
+                    </span>
+                  </label>
+                  <input
+                    id="new-proposal-submitted"
+                    type="datetime-local"
+                    value={newProposalSubmittedAt}
+                    onChange={(e) => setNewProposalSubmittedAt(e.target.value)}
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="new-proposal-version-num"
+                    className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    Version number
+                  </label>
+                  <input
+                    id="new-proposal-version-num"
+                    type="number"
+                    min={1}
+                    step={1}
+                    value={newProposalVersionNumber}
+                    onChange={(e) =>
+                      setNewProposalVersionNumber(Number(e.target.value) || 1)
+                    }
+                    required
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="new-proposal-version-label"
+                    className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    Version label{" "}
+                    <span className="font-normal normal-case text-slate-400">
+                      (optional)
+                    </span>
+                  </label>
+                  <input
+                    id="new-proposal-version-label"
+                    type="text"
+                    value={newProposalVersionLabel}
+                    onChange={(e) => setNewProposalVersionLabel(e.target.value)}
+                    maxLength={32}
+                    className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                    autoComplete="off"
+                  />
+                </div>
+
+                <div>
+                  <label
+                    htmlFor="new-proposal-summary"
+                    className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                  >
+                    Summary{" "}
+                    <span className="font-normal normal-case text-slate-400">
+                      (optional)
+                    </span>
+                  </label>
+                  <textarea
+                    id="new-proposal-summary"
+                    value={newProposalSummary}
+                    onChange={(e) => setNewProposalSummary(e.target.value)}
+                    rows={3}
+                    className="mt-1.5 w-full resize-y rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 outline-none ring-slate-300 focus:ring-2"
+                  />
+                </div>
+
+                {newProposalError ? (
+                  <div
+                    className="rounded-lg border border-red-200 bg-red-50/80 px-3 py-2 text-sm text-red-800"
+                    role="alert"
+                  >
+                    {newProposalError}
+                  </div>
+                ) : null}
+
+                <div className="flex flex-wrap justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    disabled={newProposalSaving}
+                    onClick={() => closeProposalModal()}
+                    className="rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={newProposalSaving}
+                    className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-50"
+                  >
+                    {newProposalSaving ? "Saving…" : "Create proposal"}
+                  </button>
+                </div>
+              </form>
             </Card>
           </div>
         </div>
