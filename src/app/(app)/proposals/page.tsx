@@ -1,12 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 import {
   type EntityListStatus,
   ListEmptyCard,
   ListErrorCard,
   ListLoadingCard,
 } from "@/components/entity-list/EntityListStates";
+import { ProposalsPrintDocument } from "@/components/proposals/ProposalsPrintDocument";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
@@ -17,6 +20,7 @@ import {
   proposalsMockForUi,
 } from "@/data/mock";
 import { formatDate, formatStatus } from "@/lib/format";
+import { isLikelyNegotiationUuid } from "@/lib/negotiation-id";
 import { labelsFromNegotiationsRelation } from "@/lib/supabase-embeds";
 import {
   createSupabaseClient,
@@ -30,6 +34,7 @@ type ProposalCardVM = {
   category: string;
   status: ProposalStatus;
   summary: string | null;
+  bodyHtml: string | null;
   versionLabel: string | null;
   proposingParty: ProposingParty;
   submittedAt: string | null;
@@ -45,6 +50,7 @@ type ProposalWithRelationsRow = {
   category: string;
   status: ProposalStatus;
   summary: string | null;
+  body_html: string | null;
   version_label: string | null;
   proposing_party: ProposingParty;
   submitted_at: string | null;
@@ -69,8 +75,13 @@ type ProposalWithRelationsRow = {
   } | null;
 };
 
-function buildMockRows(): ProposalCardVM[] {
-  return proposalsMockForUi.map((p) => {
+function buildMockRows(negotiationId: string | null): ProposalCardVM[] {
+  const source =
+    negotiationId && negotiationId.length > 0
+      ? proposalsMockForUi.filter((p) => p.negotiationId === negotiationId)
+      : proposalsMockForUi;
+
+  return source.map((p) => {
     const neg = getNegotiationById(p.negotiationId);
     const bu = neg ? getBargainingUnitById(neg.bargainingUnitId) : undefined;
     const local = bu ? getLocalById(bu.localId) : undefined;
@@ -82,6 +93,7 @@ function buildMockRows(): ProposalCardVM[] {
       category: p.category,
       status: p.status,
       summary: p.summary,
+      bodyHtml: p.bodyHtml ?? null,
       versionLabel: p.versionLabel,
       proposingParty: p.proposingParty,
       submittedAt: p.submittedAt,
@@ -101,6 +113,7 @@ function mapSupabaseRow(row: ProposalWithRelationsRow): ProposalCardVM {
     category: row.category,
     status: row.status,
     summary: row.summary,
+    bodyHtml: row.body_html,
     versionLabel: row.version_label,
     proposingParty: row.proposing_party,
     submittedAt: row.submitted_at,
@@ -111,19 +124,41 @@ function mapSupabaseRow(row: ProposalWithRelationsRow): ProposalCardVM {
   };
 }
 
-export default function ProposalsPage() {
+function ProposalsPageContent() {
+  const searchParams = useSearchParams();
+  const negotiationScopeRaw = searchParams.get("negotiation")?.trim() ?? "";
+  const negotiationScope =
+    negotiationScopeRaw.length > 0 ? negotiationScopeRaw : null;
+  const scopeIsUuid =
+    negotiationScope != null && isLikelyNegotiationUuid(negotiationScope);
+
   const supabaseOn = isSupabaseConfigured();
   const [status, setStatus] = useState<EntityListStatus>(() =>
     supabaseOn ? "loading" : "ready"
   );
   const [rows, setRows] = useState<ProposalCardVM[]>(() =>
-    supabaseOn ? [] : buildMockRows()
+    supabaseOn ? [] : buildMockRows(negotiationScope)
   );
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [printGeneratedAtIso, setPrintGeneratedAtIso] = useState(() =>
+    new Date().toISOString()
+  );
+  const printRafRef = useRef<number | null>(null);
+
+  function handlePrintProposals() {
+    setPrintGeneratedAtIso(new Date().toISOString());
+    if (printRafRef.current != null) {
+      cancelAnimationFrame(printRafRef.current);
+    }
+    printRafRef.current = requestAnimationFrame(() => {
+      printRafRef.current = null;
+      window.print();
+    });
+  }
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
-      setRows(buildMockRows());
+      setRows(buildMockRows(negotiationScope));
       setStatus("ready");
       setErrorMessage(null);
       return;
@@ -136,7 +171,7 @@ export default function ProposalsPage() {
     (async () => {
       try {
         const supabase = createSupabaseClient();
-        const { data, error } = await supabase
+        let query = supabase
           .from("proposals")
           .select(
             `
@@ -145,6 +180,7 @@ export default function ProposalsPage() {
             category,
             status,
             summary,
+            body_html,
             version_label,
             proposing_party,
             submitted_at,
@@ -161,6 +197,12 @@ export default function ProposalsPage() {
           `
           )
           .order("created_at", { ascending: false });
+
+        if (scopeIsUuid) {
+          query = query.eq("negotiation_id", negotiationScope!);
+        }
+
+        const { data, error } = await query;
 
         if (cancelled) return;
 
@@ -187,97 +229,178 @@ export default function ProposalsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [negotiationScope, scopeIsUuid]);
+
+  const scopedDescription =
+    negotiationScope != null
+      ? scopeIsUuid || !supabaseOn
+        ? "Showing proposals for this negotiation only. Print applies to the list below."
+        : "Add a valid negotiation id to the URL to filter (e.g. ?negotiation=<uuid>), or open Proposals from a negotiation."
+      : "All contract proposals by negotiation, unit, and district.";
 
   return (
     <>
-      <PageHeader
-        title="Proposals"
-        description="Contract proposals by negotiation, unit, and district."
-      />
+      <div className="print:hidden">
+        <PageHeader
+          title={
+            negotiationScope != null ? "Proposals (this negotiation)" : "Proposals"
+          }
+          description={
+            <span className="flex flex-col gap-2 sm:block sm:space-y-0">
+              <span>{scopedDescription}</span>
+              {negotiationScope != null ? (
+                <Link
+                  href="/proposals"
+                  className="font-medium text-slate-800 underline decoration-slate-300 underline-offset-2 hover:text-slate-950"
+                >
+                  Show all proposals
+                </Link>
+              ) : null}
+            </span>
+          }
+        />
 
-      {status === "loading" ? <ListLoadingCard noun="proposals" /> : null}
+        {status === "loading" ? <ListLoadingCard noun="proposals" /> : null}
 
-      {status === "error" && errorMessage ? (
-        <ListErrorCard noun="proposals" message={errorMessage} />
-      ) : null}
+        {status === "error" && errorMessage ? (
+          <ListErrorCard noun="proposals" message={errorMessage} />
+        ) : null}
 
-      {status === "empty" ? <ListEmptyCard noun="proposals" /> : null}
+        {status === "empty" ? (
+          negotiationScope != null ? (
+            <Card>
+              <p className="text-sm text-slate-600">
+                No proposals for this negotiation yet.
+              </p>
+            </Card>
+          ) : (
+            <ListEmptyCard noun="proposals" />
+          )
+        ) : null}
+      </div>
 
       {status === "ready" ? (
-        <div className="space-y-6">
-          {rows.map((p) => (
-            <Card key={p.id}>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div>
-                  <h2 className="text-lg font-semibold text-slate-900">
-                    {p.title}
-                  </h2>
-                  <p className="mt-1 text-sm font-medium text-slate-700">
-                    {p.negotiationTitle}
-                  </p>
-                  <p className="mt-1 text-sm text-slate-600">
-                    {p.bargainingUnitName} · {p.localName} · {p.districtName}
-                  </p>
+        <>
+          <div className="mb-6 flex flex-col gap-3 print:hidden sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-sm text-slate-600">
+              Print a clean packet for the bargaining table (browser print or
+              save as PDF).
+            </p>
+            <button
+              type="button"
+              onClick={() => handlePrintProposals()}
+              className="shrink-0 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:bg-slate-50"
+            >
+              Print proposals
+            </button>
+          </div>
+
+          <div className="space-y-6 print:hidden">
+            {rows.map((p) => (
+              <Card key={p.id}>
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900">
+                      {p.title}
+                    </h2>
+                    <p className="mt-1 text-sm font-medium text-slate-700">
+                      {p.negotiationTitle}
+                    </p>
+                    <p className="mt-1 text-sm text-slate-600">
+                      {p.bargainingUnitName} · {p.localName} ·{" "}
+                      {p.districtName}
+                    </p>
+                  </div>
+                  <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
+                    {formatStatus(p.status)}
+                  </span>
                 </div>
-                <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                  {formatStatus(p.status)}
-                </span>
-              </div>
-              <div className="mt-5 border-t border-slate-100 pt-4">
-                <dl className="grid gap-3 text-sm sm:grid-cols-2">
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Category
-                    </dt>
-                    <dd className="mt-1 text-slate-700">{p.category}</dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Status
-                    </dt>
-                    <dd className="mt-1 text-slate-700">
-                      {formatStatus(p.status)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Proposing party
-                    </dt>
-                    <dd className="mt-1 text-slate-700">
-                      {formatStatus(p.proposingParty)}
-                    </dd>
-                  </div>
-                  <div>
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Submitted date
-                    </dt>
-                    <dd className="mt-1 text-slate-700">
-                      {p.submittedAt ? formatDate(p.submittedAt) : "—"}
-                    </dd>
-                  </div>
-                  <div className="sm:col-span-2">
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Version label
-                    </dt>
-                    <dd className="mt-1 text-slate-700">
-                      {p.versionLabel?.trim() ? p.versionLabel : "—"}
-                    </dd>
-                  </div>
-                  <div className="sm:col-span-2">
-                    <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                      Summary
-                    </dt>
-                    <dd className="mt-1 text-slate-700">
-                      {p.summary?.trim() ? p.summary : "—"}
-                    </dd>
-                  </div>
-                </dl>
-              </div>
-            </Card>
-          ))}
-        </div>
+                <div className="mt-5 border-t border-slate-100 pt-4">
+                  <dl className="grid gap-3 text-sm sm:grid-cols-2">
+                    <div>
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Category
+                      </dt>
+                      <dd className="mt-1 text-slate-700">{p.category}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Status
+                      </dt>
+                      <dd className="mt-1 text-slate-700">
+                        {formatStatus(p.status)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Proposing party
+                      </dt>
+                      <dd className="mt-1 text-slate-700">
+                        {formatStatus(p.proposingParty)}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Submitted date
+                      </dt>
+                      <dd className="mt-1 text-slate-700">
+                        {p.submittedAt ? formatDate(p.submittedAt) : "—"}
+                      </dd>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Version label
+                      </dt>
+                      <dd className="mt-1 text-slate-700">
+                        {p.versionLabel?.trim() ? p.versionLabel : "—"}
+                      </dd>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Proposal language
+                      </dt>
+                      <dd className="mt-1 text-slate-700">
+                        {p.bodyHtml?.trim() ? (
+                          <div
+                            className="contract-editor-rich-preview max-h-[min(40vh,18rem)] overflow-y-auto rounded-md border border-slate-100 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900"
+                            // Saved from our editors; same trust model as the bargaining packet.
+                            dangerouslySetInnerHTML={{
+                              __html: p.bodyHtml.trim(),
+                            }}
+                          />
+                        ) : (
+                          <span className="text-slate-500">—</span>
+                        )}
+                      </dd>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        Internal notes
+                      </dt>
+                      <dd className="mt-1 whitespace-pre-wrap text-slate-700">
+                        {p.summary?.trim() ? p.summary : "—"}
+                      </dd>
+                    </div>
+                  </dl>
+                </div>
+              </Card>
+            ))}
+          </div>
+
+          <ProposalsPrintDocument
+            rows={rows}
+            generatedAtIso={printGeneratedAtIso}
+          />
+        </>
       ) : null}
     </>
+  );
+}
+
+export default function ProposalsPage() {
+  return (
+    <Suspense fallback={<ListLoadingCard noun="proposals" />}>
+      <ProposalsPageContent />
+    </Suspense>
   );
 }

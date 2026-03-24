@@ -277,6 +277,13 @@ const proposalsMockProposingParties: ProposingParty[] = [
   "employer",
 ];
 
+const proposalsMockBodyHtml: string[] = [
+  "<p>Phased reduction over two contract years with <strong>funding tied to state aid formulas</strong>.</p>",
+  "<p>Across-the-board increase effective <em>first pay period</em> after ratification.</p>",
+  "<p>Eight-hour minimum between sign-off and next report time unless mutually waived.</p>",
+  "<p>Flat stipend per on-call shift with escalation for <strong>holiday coverage</strong>.</p>",
+];
+
 /** Negotiation-scoped proposals for list UI; mirrors DB shape. */
 export const proposalsMockForUi = proposals.map((p, i) => {
   const neg = getNegotiationByBargainingUnitId(p.bargainingUnitId);
@@ -287,6 +294,7 @@ export const proposalsMockForUi = proposals.map((p, i) => {
     category: p.category,
     status: p.status,
     summary: p.summary,
+    bodyHtml: proposalsMockBodyHtml[i] ?? null,
     versionLabel: proposalsMockVersionLabels[i] ?? null,
     proposingParty: proposalsMockProposingParties[i] ?? "union",
     submittedAt: p.status === "draft" ? null : p.createdAt,

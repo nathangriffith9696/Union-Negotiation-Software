@@ -214,7 +214,7 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <aside className="flex w-64 shrink-0 flex-col border-r border-slate-800 bg-sidebar text-slate-100">
+    <aside className="flex w-64 shrink-0 flex-col border-r border-slate-800 bg-sidebar text-slate-100 print:hidden">
       <div className="border-b border-slate-800 px-5 py-6">
         <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">
           Union platform

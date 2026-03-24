@@ -2,12 +2,16 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ListErrorCard,
   ListLoadingCard,
 } from "@/components/entity-list/EntityListStates";
 import { Card } from "@/components/ui/Card";
+import {
+  NewProposalBodyEditor,
+  type NewProposalBodyEditorHandle,
+} from "@/components/proposals/NewProposalBodyEditor";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
   documentsMockForUi,
@@ -64,6 +68,8 @@ type ProposalItemVM = {
   title: string;
   category: string;
   status: ProposalStatus;
+  body_html: string | null;
+  summary: string | null;
 };
 
 type NoteItemVM = {
@@ -170,6 +176,8 @@ function buildMockDetail(negotiationId: string): {
       title: p.title,
       category: p.category,
       status: p.status,
+      body_html: p.bodyHtml ?? null,
+      summary: p.summary,
     }));
 
   const notes = notesMockForUi
@@ -403,6 +411,7 @@ export default function NegotiationDetailPage() {
   const [newProposalSummary, setNewProposalSummary] = useState("");
   const [newProposalSaving, setNewProposalSaving] = useState(false);
   const [newProposalError, setNewProposalError] = useState<string | null>(null);
+  const newProposalBodyEditorRef = useRef<NewProposalBodyEditorHandle>(null);
   const [proposalsRefreshError, setProposalsRefreshError] = useState<
     string | null
   >(null);
@@ -434,7 +443,7 @@ export default function NegotiationDetailPage() {
     const supabase = createSupabaseClient();
     const { data, error } = await supabase
       .from("proposals")
-      .select("id, title, category, status")
+      .select("id, title, category, status, body_html, summary")
       .eq("negotiation_id", id)
       .order("created_at", { ascending: false });
     if (error) return { error: error.message, rows: null };
@@ -515,7 +524,7 @@ export default function NegotiationDetailPage() {
             .order("scheduled_at", { ascending: false }),
           supabase
             .from("proposals")
-            .select("id, title, category, status")
+            .select("id, title, category, status, body_html, summary")
             .eq("negotiation_id", id)
             .order("created_at", { ascending: false }),
           supabase
@@ -802,6 +811,7 @@ export default function NegotiationDetailPage() {
         submitted_at: submittedAtIso,
         version_number: versionNum,
         version_label: versionLabel || null,
+        body_html: newProposalBodyEditorRef.current?.getHtmlForSave() ?? null,
         summary: newProposalSummary.trim() || null,
         submitted_by: null,
       };
@@ -1049,20 +1059,28 @@ export default function NegotiationDetailPage() {
 
         {activeTab === "proposals" ? (
           <>
-            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              {isSupabaseConfigured() ? (
-                <button
-                  type="button"
-                  onClick={openNewProposalModal}
-                  className="inline-flex w-fit items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:gap-4">
+                {isSupabaseConfigured() ? (
+                  <button
+                    type="button"
+                    onClick={openNewProposalModal}
+                    className="inline-flex w-fit items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800"
+                  >
+                    + New Proposal
+                  </button>
+                ) : (
+                  <p className="text-sm text-slate-500">
+                    Connect Supabase to add proposals from this workspace.
+                  </p>
+                )}
+                <Link
+                  href={`/proposals?negotiation=${encodeURIComponent(id)}`}
+                  className="w-fit text-sm font-semibold text-slate-700 underline decoration-slate-300 underline-offset-2 hover:text-slate-900"
                 >
-                  + New Proposal
-                </button>
-              ) : (
-                <p className="text-sm text-slate-500">
-                  Connect Supabase to add proposals from this workspace.
-                </p>
-              )}
+                  Print / export bargaining packet
+                </Link>
+              </div>
             </div>
 
             {proposalsRefreshError ? (
@@ -1089,6 +1107,33 @@ export default function NegotiationDetailPage() {
                       <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
                         {formatStatus(p.status)}
                       </span>
+                    </div>
+                    <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Proposal language
+                        </p>
+                        {p.body_html?.trim() ? (
+                          <div
+                            className="contract-editor-rich-preview mt-1.5 max-h-[min(36vh,14rem)] overflow-y-auto rounded-md border border-slate-100 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900"
+                            dangerouslySetInnerHTML={{
+                              __html: p.body_html.trim(),
+                            }}
+                          />
+                        ) : (
+                          <p className="mt-1.5 text-sm text-slate-500">—</p>
+                        )}
+                      </div>
+                      {p.summary?.trim() ? (
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                            Internal notes
+                          </p>
+                          <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-slate-700">
+                            {p.summary.trim()}
+                          </p>
+                        </div>
+                      ) : null}
                     </div>
                   </Card>
                 ))}
@@ -1327,7 +1372,7 @@ export default function NegotiationDetailPage() {
           onClick={() => closeProposalModal()}
         >
           <div
-            className="w-full max-w-lg"
+            className="w-full max-w-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <Card className="relative max-h-[90vh] overflow-y-auto shadow-lg">
@@ -1338,7 +1383,15 @@ export default function NegotiationDetailPage() {
                 New proposal
               </h2>
               <p className="mt-1 text-sm text-slate-600">
-                Add a proposal to this negotiation.
+                Add a proposal to this negotiation.{" "}
+                <span className="font-medium text-slate-700">
+                  Proposal language
+                </span>{" "}
+                is what prints in the bargaining packet;{" "}
+                <span className="font-medium text-slate-700">
+                  internal notes
+                </span>{" "}
+                stay for your team only.
               </p>
 
               <form className="mt-6 space-y-4" onSubmit={handleCreateProposal}>
@@ -1490,15 +1543,35 @@ export default function NegotiationDetailPage() {
                 </div>
 
                 <div>
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                    Proposal language{" "}
+                    <span className="font-normal normal-case text-slate-400">
+                      (optional — printable text)
+                    </span>
+                  </label>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Formatted language for the bargaining table and PDF packet.
+                    Leave blank for title-only entries.
+                  </p>
+                  <div className="mt-1.5">
+                    <NewProposalBodyEditor ref={newProposalBodyEditorRef} />
+                  </div>
+                </div>
+
+                <div>
                   <label
                     htmlFor="new-proposal-summary"
                     className="text-xs font-semibold uppercase tracking-wide text-slate-500"
                   >
-                    Summary{" "}
+                    Internal notes{" "}
                     <span className="font-normal normal-case text-slate-400">
                       (optional)
                     </span>
                   </label>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Caucus or tracking notes — not used as the main packet
+                    body when proposal language is set.
+                  </p>
                   <textarea
                     id="new-proposal-summary"
                     value={newProposalSummary}

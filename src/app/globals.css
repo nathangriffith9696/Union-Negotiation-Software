@@ -118,6 +118,27 @@ body {
 }
 
 /* Version preview HTML — same list behavior as editor (preflight-safe) */
+.contract-editor-rich-preview p {
+  margin: 0.4em 0;
+}
+
+.contract-editor-rich-preview strong,
+.contract-editor-rich-preview b {
+  font-weight: 600;
+}
+
+.contract-editor-rich-preview em,
+.contract-editor-rich-preview i {
+  font-style: italic;
+}
+
+.contract-editor-rich-preview h2 {
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin: 0.5em 0 0.25em;
+  line-height: 1.25;
+}
+
 .contract-editor-rich-preview ul,
 .contract-editor-rich-preview ol {
   margin: 0.5em 0;
@@ -177,6 +198,33 @@ body {
   list-style-type: lower-roman;
 }
 
+.contract-editor-rich-preview s,
+.contract-editor-rich-preview strike,
+.contract-editor-rich-preview del {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+  text-decoration-color: #64748b;
+  color: #475569;
+}
+
+.contract-editor-rich-preview pre {
+  margin: 0.5em 0;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.8125rem;
+  background: #f1f5f9;
+  border-radius: 0.375rem;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.contract-editor-rich-preview blockquote {
+  margin: 0.5em 0;
+  padding-left: 0.75rem;
+  border-left: 3px solid #e2e8f0;
+  color: #475569;
+}
+
 /* Strikethrough (TipTap Strike → <s>); compare view is plain-text diff */
 .negotiation-contract-editor .ProseMirror s,
 .negotiation-contract-editor .ProseMirror strike,
@@ -206,4 +254,410 @@ body {
   background: #f1f5f9;
   padding: 0.125em 0.35em;
   border-radius: 0.25rem;
+}
+
+/* New proposal modal — TipTap (same list/strike behavior as contract editor, compact) */
+.proposal-modal-body-editor.ProseMirror {
+  outline: none;
+}
+
+.proposal-modal-body-editor.ProseMirror p {
+  margin: 0.4em 0;
+}
+
+.proposal-modal-body-editor.ProseMirror h2 {
+  font-weight: 600;
+  font-size: 1.05rem;
+  margin: 0.6em 0 0.3em;
+  line-height: 1.25;
+}
+
+.proposal-modal-body-editor.ProseMirror ul,
+.proposal-modal-body-editor.ProseMirror ol {
+  margin: 0.4em 0;
+  padding-left: 1.5rem;
+  list-style-position: outside;
+}
+
+.proposal-modal-body-editor.ProseMirror ul {
+  list-style-type: disc;
+}
+
+.proposal-modal-body-editor.ProseMirror ol {
+  list-style-type: decimal;
+}
+
+.proposal-modal-body-editor.ProseMirror li {
+  display: list-item;
+  margin: 0.12em 0;
+}
+
+.proposal-modal-body-editor.ProseMirror li > ul,
+.proposal-modal-body-editor.ProseMirror li > ol {
+  margin-top: 0.2em;
+  margin-bottom: 0.2em;
+}
+
+.proposal-modal-body-editor.ProseMirror ul ul {
+  list-style-type: circle;
+}
+
+.proposal-modal-body-editor.ProseMirror ul ul ul {
+  list-style-type: square;
+}
+
+.proposal-modal-body-editor.ProseMirror ol ol:not([type]) {
+  list-style-type: lower-alpha;
+}
+
+.proposal-modal-body-editor.ProseMirror ol ol ol:not([type]) {
+  list-style-type: lower-roman;
+}
+
+.proposal-modal-body-editor.ProseMirror s,
+.proposal-modal-body-editor.ProseMirror strike,
+.proposal-modal-body-editor.ProseMirror del {
+  text-decoration: line-through;
+  text-decoration-thickness: 1px;
+}
+
+.proposal-modal-body-editor.ProseMirror blockquote {
+  margin: 0.4em 0;
+  padding-left: 0.75rem;
+  border-left: 3px solid #e2e8f0;
+  color: #475569;
+}
+
+.proposal-modal-body-editor.ProseMirror pre {
+  margin: 0.5em 0;
+  padding: 0.5rem 0.65rem;
+  font-size: 0.8125rem;
+  background: #f1f5f9;
+  border-radius: 0.375rem;
+  overflow-x: auto;
+}
+
+.proposal-modal-body-editor.ProseMirror code {
+  font-size: 0.875em;
+  background: #f1f5f9;
+  padding: 0.125em 0.35em;
+  border-radius: 0.25rem;
+}
+
+.proposal-modal-body-editor.ProseMirror hr {
+  margin: 0.65em 0;
+  border: none;
+  border-top: 1px solid #e2e8f0;
+}
+
+/* Proposals print / bargaining packet (contract-style, not dashboard cards) */
+@media print {
+  @page {
+    margin: 1.25cm;
+  }
+
+  body {
+    background: white !important;
+  }
+
+  #proposals-print-document.proposal-packet-root {
+    font-family: Georgia, "Times New Roman", Times, serif;
+    font-size: 11pt;
+    line-height: 1.45;
+    color: #000;
+  }
+
+  #proposals-print-document .packet-doc-kicker {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 8pt;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #333;
+    margin: 0;
+  }
+
+  #proposals-print-document .packet-doc-title {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 18pt;
+    font-weight: 600;
+    margin: 0.35em 0 0;
+    color: #000;
+  }
+
+  #proposals-print-document .packet-doc-meta {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 9pt;
+    color: #444;
+    margin: 0.75em 0 0;
+  }
+
+  #proposals-print-document .packet-doc-header {
+    border-bottom: 1pt solid #000;
+    padding-bottom: 1rem;
+    margin-bottom: 1.25rem;
+  }
+
+  #proposals-print-document .packet-negotiation--page-break {
+    break-before: page;
+    page-break-before: always;
+  }
+
+  #proposals-print-document .packet-negotiation-header {
+    margin-bottom: 1.25rem;
+  }
+
+  #proposals-print-document .packet-negotiation-title {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 14pt;
+    font-weight: 700;
+    margin: 0;
+    color: #000;
+  }
+
+  #proposals-print-document .packet-negotiation-context {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 10pt;
+    color: #333;
+    margin: 0.35em 0 0;
+  }
+
+  #proposals-print-document .packet-negotiation-tracking {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 9pt;
+    color: #555;
+    font-style: italic;
+    margin: 0.5em 0 0;
+  }
+
+  #proposals-print-document .packet-articles {
+    margin-top: 0.25rem;
+  }
+
+  #proposals-print-document .packet-article {
+    margin-bottom: 1.35rem;
+    orphans: 3;
+    widows: 3;
+  }
+
+  #proposals-print-document .packet-article-heading {
+    font-size: 11pt;
+    font-weight: 700;
+    margin: 0 0 0.35em;
+    padding-bottom: 0.2em;
+    border-bottom: 0.5pt solid #999;
+    color: #000;
+  }
+
+  #proposals-print-document .packet-article-inline-meta {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 8pt;
+    font-weight: 500;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+    color: #555;
+    margin: 0 0 0.65em;
+  }
+
+  #proposals-print-document .packet-article-body {
+    margin: 0;
+  }
+
+  #proposals-print-document .packet-article-prose {
+    font-size: 11pt;
+    text-align: justify;
+    hyphens: auto;
+    margin: 0;
+  }
+
+  #proposals-print-document .packet-article-prose--empty {
+    font-style: italic;
+    color: #666;
+  }
+
+  /* TipTap / contract-editor HTML inside bargaining packet */
+  #proposals-print-document .packet-article-prose--rich {
+    text-align: justify;
+  }
+
+  #proposals-print-document .packet-article-prose--rich > *:first-child {
+    margin-top: 0;
+  }
+
+  #proposals-print-document .packet-article-prose--rich > *:last-child {
+    margin-bottom: 0;
+  }
+
+  #proposals-print-document .packet-article-prose--rich p {
+    margin: 0 0 0.65em;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ul,
+  #proposals-print-document .packet-article-prose--rich ol {
+    margin: 0 0 0.65em 0;
+    padding-left: 1.35em;
+    list-style-position: outside;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ul {
+    list-style-type: disc;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ol {
+    list-style-type: decimal;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ol[type="a"] {
+    list-style-type: lower-alpha;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ol[type="A"] {
+    list-style-type: upper-alpha;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ol[type="i"] {
+    list-style-type: lower-roman;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ol[type="I"] {
+    list-style-type: upper-roman;
+  }
+
+  #proposals-print-document .packet-article-prose--rich li {
+    display: list-item;
+    margin: 0.2em 0;
+    padding-left: 0.2em;
+  }
+
+  #proposals-print-document .packet-article-prose--rich li > ul,
+  #proposals-print-document .packet-article-prose--rich li > ol {
+    margin-top: 0.25em;
+    margin-bottom: 0.25em;
+    margin-left: 0.35em;
+    padding-left: 1.35em;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ul ul {
+    list-style-type: circle;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ul ul ul {
+    list-style-type: square;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ol ol:not([type]) {
+    list-style-type: lower-alpha;
+  }
+
+  #proposals-print-document .packet-article-prose--rich ol ol ol:not([type]) {
+    list-style-type: lower-roman;
+  }
+
+  #proposals-print-document .packet-article-prose--rich li p {
+    margin: 0.15em 0;
+  }
+
+  #proposals-print-document .packet-article-prose--rich strong,
+  #proposals-print-document .packet-article-prose--rich b {
+    font-weight: 700;
+  }
+
+  #proposals-print-document .packet-article-prose--rich em,
+  #proposals-print-document .packet-article-prose--rich i {
+    font-style: italic;
+  }
+
+  #proposals-print-document .packet-article-prose--rich u {
+    text-decoration: underline;
+  }
+
+  #proposals-print-document .packet-article-prose--rich s,
+  #proposals-print-document .packet-article-prose--rich strike,
+  #proposals-print-document .packet-article-prose--rich del {
+    color: #333;
+    text-decoration: line-through;
+    text-decoration-thickness: 1pt;
+    text-decoration-color: #000;
+  }
+
+  /* Highlights: <mark> and pasted span[background-color] rely on backgrounds; many UAs omit them in print */
+  #proposals-print-document .packet-article-prose--rich mark {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  #proposals-print-document .packet-article-prose--rich mark:not([style*="background"]) {
+    background-color: #fef08a;
+    color: #171717;
+  }
+
+  #proposals-print-document .packet-article-prose--rich span[style*="background-color"] {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+  }
+
+  #proposals-print-document .packet-article-prose--rich a {
+    color: #000;
+    text-decoration: underline;
+  }
+
+  #proposals-print-document .packet-article-prose--rich h1,
+  #proposals-print-document .packet-article-prose--rich h2,
+  #proposals-print-document .packet-article-prose--rich h3 {
+    font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 11pt;
+    font-weight: 700;
+    margin: 0.85em 0 0.4em;
+    line-height: 1.25;
+  }
+
+  #proposals-print-document .packet-article-prose--rich h1:first-child,
+  #proposals-print-document .packet-article-prose--rich h2:first-child,
+  #proposals-print-document .packet-article-prose--rich h3:first-child {
+    margin-top: 0;
+  }
+
+  #proposals-print-document .packet-article-prose--rich blockquote {
+    margin: 0 0 0.65em 1em;
+    padding-left: 0.65em;
+    border-left: 2pt solid #999;
+    color: #222;
+  }
+
+  #proposals-print-document .packet-article-prose--rich pre {
+    font-family: ui-monospace, monospace;
+    font-size: 9pt;
+    margin: 0 0 0.65em;
+    padding: 0.4em 0.55em;
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: #f5f5f5;
+    border: 0.5pt solid #ccc;
+    border-radius: 2pt;
+  }
+
+  #proposals-print-document .packet-article-prose--rich :not(pre) > code {
+    font-family: ui-monospace, monospace;
+    font-size: 0.95em;
+    background: #f0f0f0;
+    padding: 0.08em 0.28em;
+    border-radius: 2pt;
+  }
+
+  #proposals-print-document .packet-article-prose--rich pre code {
+    font-size: inherit;
+    background: transparent;
+    padding: 0;
+    border-radius: 0;
+  }
+
+  #proposals-print-document .packet-article-prose--rich hr {
+    border: none;
+    border-top: 0.5pt solid #999;
+    margin: 0.75em 0;
+  }
 }

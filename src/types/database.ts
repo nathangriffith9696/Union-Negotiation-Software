@@ -123,6 +123,8 @@ export type ProposalRow = {
   category: string;
   status: ProposalStatus;
   summary: string | null;
+  /** Rich HTML from the contract editor / formal language; print packet prefers this over summary. */
+  body_html: string | null;
   created_at: string;
 };
 
@@ -170,6 +172,13 @@ export type NegotiationContractVersionRow = {
   created_at: string;
 };
 
+/** Single working draft row per negotiation (Google-Docs-style continuous edit). */
+export type NegotiationContractDraftRow = {
+  negotiation_id: string;
+  body_html: string;
+  updated_at: string;
+};
+
 /** Insert payloads (omit DB defaults where optional). */
 export type DistrictInsert = Omit<DistrictRow, "id" | "created_at"> &
   Partial<Pick<DistrictRow, "id" | "created_at">>;
@@ -191,7 +200,12 @@ export type SessionInsert = Omit<SessionRow, "id" | "created_at" | "format"> &
 
 export type ProposalInsert = Omit<
   ProposalRow,
-  "id" | "created_at" | "proposal_group_id" | "version_number" | "proposing_party"
+  | "id"
+  | "created_at"
+  | "proposal_group_id"
+  | "version_number"
+  | "proposing_party"
+  | "body_html"
 > &
   Partial<
     Pick<
@@ -201,6 +215,7 @@ export type ProposalInsert = Omit<
       | "proposal_group_id"
       | "version_number"
       | "proposing_party"
+      | "body_html"
     >
   >;
 
@@ -231,6 +246,16 @@ export type NegotiationContractVersionInsert = Omit<
   "id" | "created_at"
 > &
   Partial<Pick<NegotiationContractVersionRow, "id" | "created_at">>;
+
+export type NegotiationContractDraftInsert = Omit<
+  NegotiationContractDraftRow,
+  "updated_at"
+> &
+  Partial<Pick<NegotiationContractDraftRow, "updated_at">>;
+
+export type NegotiationContractDraftUpdate = Partial<
+  Omit<NegotiationContractDraftRow, "negotiation_id">
+>;
 
 /** Partial updates by primary key. */
 export type DistrictUpdate = Partial<Omit<DistrictRow, "id" | "created_at">>;
@@ -298,6 +323,11 @@ export type UnionNegotiationDatabase = {
         Row: NegotiationContractVersionRow;
         Insert: NegotiationContractVersionInsert;
         Update: NegotiationContractVersionUpdate;
+      };
+      negotiation_contract_drafts: {
+        Row: NegotiationContractDraftRow;
+        Insert: NegotiationContractDraftInsert;
+        Update: NegotiationContractDraftUpdate;
       };
     };
   };

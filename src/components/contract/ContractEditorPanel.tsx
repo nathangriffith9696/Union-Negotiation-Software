@@ -3,6 +3,7 @@
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Editor } from "@tiptap/core";
 import { Card } from "@/components/ui/Card";
@@ -12,15 +13,21 @@ import {
   buildSectionDiffRows,
   sumChangeTotals,
   type SectionDiffRow,
+  wrapDiffAdditionsInProposalBodyHtml,
 } from "@/lib/contract-compare";
 import { formatDate } from "@/lib/format";
+import { isLikelyNegotiationUuid } from "@/lib/negotiation-id";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
 } from "@/lib/supabase";
-import type { NegotiationContractVersionInsert } from "@/types/database";
+import type {
+  NegotiationContractVersionInsert,
+  ProposalInsert,
+} from "@/types/database";
 
 const MOCK_STORAGE_PREFIX = "union-contract-versions:v1:";
+const MOCK_DRAFT_PREFIX = "union-contract-draft:v1:";
 
 type ContractVersionItem = {
   id: string;
@@ -66,6 +73,44 @@ function writeMockVersions(negotiationId: string, versions: MockVersion[]) {
   localStorage.setItem(
     mockStorageKey(negotiationId),
     JSON.stringify({ versions })
+  );
+}
+
+function mockDraftKey(negotiationId: string) {
+  return `${MOCK_DRAFT_PREFIX}${negotiationId}`;
+}
+
+function readMockDraft(negotiationId: string): {
+  body_html: string;
+  updated_at: string | null;
+} | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const raw = localStorage.getItem(mockDraftKey(negotiationId));
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as {
+      body_html?: string;
+      updated_at?: string | null;
+    };
+    if (typeof parsed.body_html !== "string") return null;
+    return {
+      body_html: parsed.body_html,
+      updated_at:
+        typeof parsed.updated_at === "string" ? parsed.updated_at : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function writeMockDraft(
+  negotiationId: string,
+  bodyHtml: string,
+  updatedAtIso: string
+) {
+  localStorage.setItem(
+    mockDraftKey(negotiationId),
+    JSON.stringify({ body_html: bodyHtml, updated_at: updatedAtIso })
   );
 }
 
@@ -134,7 +179,7 @@ function friendlyContractInsertError(err: {
   const code = err.code ?? "";
 
   if (code === "23505" || msg.includes("unique constraint")) {
-    return "A version with this number already exists (for example, another tab saved first). Click “Save new version” again.";
+    return "A snapshot with this number already exists (for example, another tab saved first). Try “Create snapshot” again.";
   }
 
   if (msg.includes("foreign key") || msg.includes("negotiation_id")) {
@@ -149,7 +194,25 @@ function friendlyContractInsertError(err: {
   }
 
   return (
-    err.message.trim() || "Could not save the contract version. Please try again."
+    err.message.trim() ||
+    "Could not save the contract snapshot. Please try again."
+  );
+}
+
+function friendlyDraftUpsertError(err: {
+  message: string;
+  code?: string;
+}): string {
+  const msg = err.message.toLowerCase();
+  const code = err.code ?? "";
+
+  if (code === "23503" || msg.includes("foreign key")) {
+    return "This negotiation could not be found, or your account cannot update the working draft.";
+  }
+
+  return (
+    err.message.trim() ||
+    "Could not save the working draft. Please try again."
   );
 }
 
@@ -186,16 +249,108 @@ function proposalCandidateSnippet(row: SectionDiffRow): string {
   return `${collapsed.slice(0, PROPOSAL_CANDIDATE_SNIPPET_MAX - 1).trimEnd()}…`;
 }
 
+function friendlyProposalSaveError(err: {
+  message: string;
+  code?: string;
+}): string {
+  const msg = err.message.toLowerCase();
+  const code = err.code ?? "";
+
+  if (code === "23503" || msg.includes("foreign key")) {
+    return "The negotiation was not found in the database, or your account cannot write proposals for it.";
+  }
+
+  if (code === "23505" || msg.includes("unique constraint")) {
+    return "A uniqueness rule blocked one of the proposals. Edit titles and try again.";
+  }
+
+  return err.message.trim() || "Could not save proposals. Please try again.";
+}
+
+function buildDefaultProposalReviewFields(
+  row: SectionDiffRow,
+  negotiationId: string
+): {
+  title: string;
+  category: string;
+  summary: string;
+  negotiation_id: string;
+} {
+  const headingShort =
+    row.headingLabel.length > 90
+      ? `${row.headingLabel.slice(0, 87)}…`
+      : row.headingLabel;
+  return {
+    title: headingShort,
+    category: "general",
+    summary: "",
+    negotiation_id: negotiationId,
+  };
+}
+
+type ProposalReviewItem = {
+  /** Stable merge key when row indices shift (same heading in the diff). */
+  sectionKey: string;
+  include: boolean;
+  title: string;
+  category: string;
+  summary: string;
+};
+
+/** Readable redline preview for proposal review (larger type, generous scroll area). */
+function WorkspaceRedlinePreview({ row }: { row: SectionDiffRow }) {
+  return (
+    <div className="min-h-[14rem] max-h-[min(55vh,32rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-900 shadow-inner shadow-slate-900/[0.02]">
+      {row.parts.map((part, i) => {
+        if (part.added) {
+          return (
+            <mark
+              key={`snip-${row.index}-a-${i}`}
+              className="mx-0.5 inline rounded border border-emerald-400/90 bg-emerald-100 px-1 py-0.5 font-normal text-emerald-950 [text-decoration:none]"
+            >
+              {part.value}
+            </mark>
+          );
+        }
+        if (part.removed) {
+          return (
+            <span
+              key={`snip-${row.index}-r-${i}`}
+              className="mx-0.5 inline rounded border border-rose-300 bg-rose-50 px-1 py-0.5 text-rose-950 line-through decoration-rose-700 decoration-2"
+            >
+              {part.value}
+            </span>
+          );
+        }
+        return <span key={`snip-${row.index}-c-${i}`}>{part.value}</span>;
+      })}
+    </div>
+  );
+}
+
 function ContractCompareView({
-  previousHtml,
-  selectedHtml,
+  negotiationId,
+  baselineHtml,
+  workingDraftHtml,
+  baselineLabel,
+  showProposalReview = true,
+  compareContextLine,
 }: {
-  previousHtml: string;
-  selectedHtml: string;
+  negotiationId: string;
+  /** Older / baseline side of the diff (formal snapshot HTML). */
+  baselineHtml: string;
+  /** Newer side: live working draft HTML, or a later snapshot in history mode. */
+  workingDraftHtml: string;
+  baselineLabel: string;
+  /** When false, show redline only (snapshot-to-snapshot history compare). */
+  showProposalReview?: boolean;
+  /** Shown under “Detected changes”, e.g. “Working draft vs Version 3”. */
+  compareContextLine?: string;
 }) {
+  const router = useRouter();
   const rows = useMemo(
-    () => buildSectionDiffRows(previousHtml, selectedHtml),
-    [previousHtml, selectedHtml]
+    () => buildSectionDiffRows(baselineHtml, workingDraftHtml),
+    [baselineHtml, workingDraftHtml]
   );
   const totals = useMemo(() => sumChangeTotals(rows), [rows]);
   const changedRows = useMemo(
@@ -203,29 +358,162 @@ function ContractCompareView({
     [rows]
   );
 
+  const changedHeadingsKey = useMemo(
+    () => changedRows.map((r) => r.headingLabel).join("\u001f"),
+    [changedRows]
+  );
+
+  const [reviewItems, setReviewItems] = useState<
+    Record<number, ProposalReviewItem>
+  >({});
+
+  useEffect(() => {
+    setReviewItems((prev) => {
+      const next: Record<number, ProposalReviewItem> = {};
+      for (const r of changedRows) {
+        const d = buildDefaultProposalReviewFields(r, negotiationId);
+        const prevMatch = Object.values(prev).find(
+          (p) => p.sectionKey === r.headingLabel
+        );
+        next[r.index] = prevMatch
+          ? { ...prevMatch, sectionKey: r.headingLabel }
+          : {
+              sectionKey: r.headingLabel,
+              include: false,
+              title: d.title,
+              category: d.category,
+              summary: d.summary,
+            };
+      }
+      return next;
+    });
+    // Intentionally omit `changedRows`: same `changedHeadingsKey` should not re-merge (avoids setState every keystroke).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [changedHeadingsKey, negotiationId]);
+  const [saveProposalsBusy, setSaveProposalsBusy] = useState(false);
+  const [saveProposalsError, setSaveProposalsError] = useState<string | null>(
+    null
+  );
+
+  const selectedCount = useMemo(
+    () => changedRows.filter((r) => reviewItems[r.index]?.include).length,
+    [changedRows, reviewItems]
+  );
+
+  async function handleSaveSelectedProposals() {
+    setSaveProposalsError(null);
+    if (selectedCount === 0) {
+      setSaveProposalsError("Select at least one change with “Include as proposal”.");
+      return;
+    }
+    if (!isSupabaseConfigured()) {
+      setSaveProposalsError(
+        "Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY to save proposals."
+      );
+      return;
+    }
+    if (!isLikelyNegotiationUuid(negotiationId)) {
+      setSaveProposalsError(
+        "This editor is using a mock negotiation ID. Open a negotiation from your database to save proposals."
+      );
+      return;
+    }
+
+    const payload: ProposalInsert[] = [];
+    for (const r of changedRows) {
+      const it = reviewItems[r.index];
+      if (!it?.include) continue;
+      const rawBody = r.newBodyHtml?.trim();
+      const bodyHtml = rawBody
+        ? wrapDiffAdditionsInProposalBodyHtml(rawBody, r.parts)
+        : "";
+      payload.push({
+        negotiation_id: negotiationId.trim(),
+        prior_proposal_id: null,
+        title: it.title.trim() || "Contract change proposal",
+        category: it.category.trim() || "general",
+        status: "draft",
+        summary: it.summary.trim() || null,
+        body_html: bodyHtml || null,
+        submitted_at: null,
+        submitted_by: null,
+        version_label: null,
+        proposing_party: "union",
+        version_number: 1,
+      });
+    }
+
+    if (payload.length === 0) {
+      setSaveProposalsError("Select at least one change with “Include as proposal”.");
+      return;
+    }
+
+    setSaveProposalsBusy(true);
+    try {
+      const supabase = createSupabaseClient();
+      const { error } = await supabase
+        .from("proposals")
+        .insert(payload as never);
+
+      if (error) {
+        setSaveProposalsError(friendlyProposalSaveError(error));
+        return;
+      }
+
+      router.push(
+        `/proposals?negotiation=${encodeURIComponent(negotiationId.trim())}`
+      );
+    } catch (e) {
+      setSaveProposalsError(
+        e instanceof Error
+          ? e.message.trim() || "Save failed."
+          : "Save failed."
+      );
+    } finally {
+      setSaveProposalsBusy(false);
+    }
+  }
+
   return (
-    <div className="space-y-3">
-      <div className="rounded-lg border border-slate-200 bg-slate-50/90 p-3 shadow-sm ring-1 ring-slate-900/[0.03]">
+    <div className="space-y-8">
+      <div className="rounded-xl border border-slate-200 bg-slate-50/90 p-4 shadow-sm ring-1 ring-slate-900/[0.03] sm:p-5">
         <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
           Detected changes
         </p>
+        {compareContextLine ? (
+          <p className="mt-1 text-sm font-medium text-slate-800">
+            {compareContextLine}
+          </p>
+        ) : null}
         {changedRows.length === 0 ? (
           <p className="mt-2 text-sm text-slate-600">
-            No textual changes vs the previous saved version.
+            {!baselineHtml.trim() && workingDraftHtml.trim() ? (
+              <>
+                No snapshot baseline yet. Use{" "}
+                <span className="font-medium text-slate-800">
+                  Create snapshot
+                </span>{" "}
+                once, then compare your working draft to that milestone.
+              </>
+            ) : (
+              <>
+                No textual changes vs {baselineLabel}.
+              </>
+            )}
           </p>
         ) : (
           <>
-            <p className="mt-2 text-sm text-slate-800">
-              <span className="font-medium text-slate-900">
+            <p className="mt-2 text-base text-slate-800">
+              <span className="font-semibold text-slate-900">
                 {totals.sectionsWithChanges}
               </span>{" "}
               {totals.sectionsWithChanges === 1 ? "section" : "sections"} with
               edits ·{" "}
-              <span className="font-medium text-emerald-800">
+              <span className="font-semibold text-emerald-800">
                 +{totals.addedWords} words
               </span>
               {" · "}
-              <span className="font-medium text-rose-800">
+              <span className="font-semibold text-rose-800">
                 −{totals.removedWords} words
               </span>
               <span className="text-slate-500">
@@ -233,11 +521,11 @@ function ContractCompareView({
                 (~{totals.addedChars} / ~{totals.removedChars} characters)
               </span>
             </p>
-            <ul className="mt-3 max-h-40 space-y-2 overflow-y-auto border-t border-slate-200/80 pt-3 sm:max-h-48">
+            <ul className="mt-4 grid max-h-none gap-2 sm:grid-cols-2 lg:grid-cols-3">
               {changedRows.map((r) => (
                 <li
                   key={r.index}
-                  className="rounded-md border border-slate-100 bg-white/90 px-2.5 py-2 text-sm shadow-sm"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2.5 text-sm shadow-sm"
                 >
                   <p className="font-medium leading-snug text-slate-900 line-clamp-2">
                     {r.headingLabel}
@@ -250,10 +538,6 @@ function ContractCompareView({
                     <span className="font-medium text-rose-800">
                       −{r.removedWords} words
                     </span>
-                    <span className="text-slate-500">
-                      {" "}
-                      (~{r.addedChars} / ~{r.removedChars} chars)
-                    </span>
                   </p>
                 </li>
               ))}
@@ -262,71 +546,233 @@ function ContractCompareView({
         )}
       </div>
 
-      {changedRows.length > 0 ? (
-        <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm ring-1 ring-slate-900/[0.03]">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">
-            Draft proposal candidates
-          </p>
-          <p className="mt-1 text-[11px] leading-snug text-slate-500">
-            Read-only summaries from changed sections. Nothing is saved as a
-            formal proposal.
-          </p>
-          <ul className="mt-3 max-h-[min(40vh,18rem)] space-y-3 overflow-y-auto border-t border-slate-100 pt-3">
+      {showProposalReview && changedRows.length > 0 ? (
+        <div>
+          <div className="mb-4">
+            <h3 className="text-lg font-semibold text-slate-900">
+              Proposal review
+            </h3>
+            <p className="mt-1 max-w-3xl text-sm text-slate-600">
+              Select changes to capture as draft proposals. Defaults come from
+              the contract redline; adjust title, category, and summary before
+              saving.
+            </p>
+          </div>
+          {saveProposalsError ? (
+            <p className="mb-4 rounded-lg border border-red-200 bg-red-50/90 px-3 py-2.5 text-sm text-red-800">
+              {saveProposalsError}
+            </p>
+          ) : null}
+          <ul className="space-y-6">
             {changedRows.map((row) => {
+              const it = reviewItems[row.index];
+              if (!it) return null;
               const changeType = proposalCandidateChangeType(row);
-              const snippet = proposalCandidateSnippet(row);
               const typePillClass =
                 changeType === "Added language"
                   ? "border-emerald-300/90 bg-emerald-50 text-emerald-900"
                   : changeType === "Removed language"
                     ? "border-rose-300/90 bg-rose-50 text-rose-900"
-                    : "border-slate-300 bg-slate-50 text-slate-800";
+                    : "border-slate-300 bg-slate-100 text-slate-800";
               return (
                 <li
-                  key={`proposal-candidate-${row.index}`}
-                  className="rounded-lg border border-slate-200 bg-slate-50/70 p-3 shadow-sm"
+                  key={`proposal-review-${row.index}`}
+                  className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm sm:p-6"
                 >
-                  <p className="text-sm font-semibold leading-snug text-slate-900">
-                    {row.headingLabel}
-                  </p>
-                  <p className="mt-2">
-                    <span
-                      className={`inline-block rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${typePillClass}`}
-                    >
-                      {changeType}
-                    </span>
-                  </p>
-                  <p className="mt-2 text-xs leading-relaxed text-slate-600">
-                    {snippet.length > 0 ? (
-                      <span className="line-clamp-4">{snippet}</span>
-                    ) : (
-                      <span className="italic text-slate-500">
-                        No short snippet (e.g. whitespace-only or structural
-                        tweak).
-                      </span>
-                    )}
-                  </p>
-                  <p className="mt-2 text-xs text-slate-600">
-                    <span className="font-medium text-emerald-800">
-                      +{row.addedWords} words added
-                    </span>
-                    <span className="mx-1.5 text-slate-300" aria-hidden>
-                      ·
-                    </span>
-                    <span className="font-medium text-rose-800">
-                      −{row.removedWords} words removed
-                    </span>
-                  </p>
+                  <div className="grid gap-8 lg:grid-cols-2 lg:gap-10">
+                    <div className="min-w-0 space-y-4">
+                      <label className="flex cursor-pointer items-start gap-3">
+                        <input
+                          type="checkbox"
+                          checked={it.include}
+                          onChange={(e) =>
+                            setReviewItems((prev) => ({
+                              ...prev,
+                              [row.index]: {
+                                ...prev[row.index]!,
+                                include: e.target.checked,
+                              },
+                            }))
+                          }
+                          className="mt-1 h-4 w-4 shrink-0 rounded border-slate-300 text-slate-900 focus:ring-slate-400"
+                        />
+                        <span className="text-sm font-medium text-slate-800">
+                          Include as proposal
+                        </span>
+                      </label>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Article / section
+                        </p>
+                        <p className="mt-1 text-base font-semibold leading-snug text-slate-900">
+                          {row.headingLabel}
+                        </p>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span
+                          className={`inline-block rounded-full border px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${typePillClass}`}
+                        >
+                          {changeType}
+                        </span>
+                        <span className="text-sm text-slate-600">
+                          <span className="font-medium text-emerald-800">
+                            +{row.addedWords}
+                          </span>{" "}
+                          words added ·{" "}
+                          <span className="font-medium text-rose-800">
+                            −{row.removedWords}
+                          </span>{" "}
+                          removed
+                        </span>
+                      </div>
+                      <div>
+                        <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                          Redline preview
+                        </p>
+                        <WorkspaceRedlinePreview row={row} />
+                      </div>
+                    </div>
+                    <div className="min-w-0 space-y-4 border-t border-slate-100 pt-6 lg:border-t-0 lg:border-l lg:pl-10 lg:pt-0">
+                      <div>
+                        <label
+                          htmlFor={`proposal-title-${row.index}`}
+                          className="block text-xs font-semibold text-slate-700"
+                        >
+                          Proposal title
+                        </label>
+                        <input
+                          id={`proposal-title-${row.index}`}
+                          type="text"
+                          value={it.title}
+                          onChange={(e) =>
+                            setReviewItems((prev) => ({
+                              ...prev,
+                              [row.index]: {
+                                ...prev[row.index]!,
+                                title: e.target.value,
+                              },
+                            }))
+                          }
+                          className="mt-1.5 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400/30"
+                        />
+                      </div>
+                      <div>
+                        <label
+                          htmlFor={`proposal-category-${row.index}`}
+                          className="block text-xs font-semibold text-slate-700"
+                        >
+                          Category
+                        </label>
+                        <select
+                          id={`proposal-category-${row.index}`}
+                          value={it.category}
+                          onChange={(e) =>
+                            setReviewItems((prev) => ({
+                              ...prev,
+                              [row.index]: {
+                                ...prev[row.index]!,
+                                category: e.target.value,
+                              },
+                            }))
+                          }
+                          className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400/30"
+                        >
+                          <option value="general">general</option>
+                          <option value="economics">economics</option>
+                          <option value="benefits">benefits</option>
+                          <option value="working_conditions">
+                            working_conditions
+                          </option>
+                          <option value="grievance">grievance</option>
+                          <option value="contract_administration">
+                            contract_administration
+                          </option>
+                          <option value="other">other</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label
+                          htmlFor={`proposal-summary-${row.index}`}
+                          className="block text-xs font-semibold text-slate-700"
+                        >
+                          Internal notes (optional)
+                        </label>
+                        <textarea
+                          id={`proposal-summary-${row.index}`}
+                          value={it.summary}
+                          onChange={(e) =>
+                            setReviewItems((prev) => ({
+                              ...prev,
+                              [row.index]: {
+                                ...prev[row.index]!,
+                                summary: e.target.value,
+                              },
+                            }))
+                          }
+                          rows={10}
+                          className="mt-1.5 min-h-[12rem] w-full resize-y rounded-lg border border-slate-200 px-3 py-2.5 text-sm leading-relaxed text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400/30"
+                        />
+                      </div>
+                      <p className="text-xs text-slate-500">
+                        negotiation_id{" "}
+                        <span className="font-mono text-slate-700">
+                          {negotiationId}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
                 </li>
               );
             })}
           </ul>
+          <div className="mt-8 rounded-xl border-2 border-slate-200 bg-slate-50 p-4 sm:flex sm:flex-wrap sm:items-center sm:justify-between sm:gap-4 sm:p-5">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-slate-900">
+                Save draft proposals
+              </p>
+              <p className="mt-0.5 text-xs text-slate-600">
+                {selectedCount > 0
+                  ? `${selectedCount} selected — saved as drafts on the proposals list.`
+                  : "Select at least one change above."}
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={
+                saveProposalsBusy ||
+                selectedCount === 0 ||
+                !isSupabaseConfigured() ||
+                !isLikelyNegotiationUuid(negotiationId)
+              }
+              onClick={() => void handleSaveSelectedProposals()}
+              className="mt-3 w-full shrink-0 rounded-lg bg-slate-900 px-5 py-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 sm:mt-0 sm:w-auto"
+            >
+              {saveProposalsBusy
+                ? "Saving…"
+                : `Save selected as proposals${selectedCount > 0 ? ` (${selectedCount})` : ""}`}
+            </button>
+          </div>
+          {!isSupabaseConfigured() ? (
+            <p className="mt-3 text-sm text-slate-500">
+              Connect Supabase to enable saving. After a successful save you are
+              sent to the proposals list.
+            </p>
+          ) : !isLikelyNegotiationUuid(negotiationId) ? (
+            <p className="mt-3 text-sm text-slate-500">
+              Use a database-backed negotiation (UUID in the URL) to save
+              proposals.
+            </p>
+          ) : null}
         </div>
       ) : null}
 
-      <div className="rounded-lg border border-slate-200 bg-white p-3 text-sm leading-relaxed shadow-sm">
-        <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
-          Full redline by section
+      <div className="rounded-xl border border-slate-200 bg-slate-50/50 p-4 text-sm leading-relaxed shadow-sm sm:p-5">
+        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
+          Reference — full redline by section
+        </p>
+        <p className="mb-2 text-sm font-medium text-slate-700">
+          Complete diff for filing or counsel review (same content as above,
+          uninterrupted).
         </p>
         <p className="mb-3 flex flex-wrap gap-x-4 gap-y-2 text-[11px] leading-snug text-slate-500">
           <span>
@@ -354,19 +800,19 @@ function ContractCompareView({
           </span>
         </p>
 
-        <div className="max-h-[min(52vh,24rem)] space-y-5 overflow-y-auto pr-0.5">
+        <div className="max-h-[min(70vh,44rem)] space-y-6 overflow-y-auto rounded-lg border border-slate-200/80 bg-white p-4 pr-2">
           {changedRows.length === 0 ? (
             <p className="text-slate-600">Nothing to show in the diff.</p>
           ) : (
             changedRows.map((row) => (
               <section
                 key={row.index}
-                className="border-b border-slate-100 pb-4 last:border-b-0 last:pb-0"
+                className="border-b border-slate-100 pb-5 last:border-b-0 last:pb-0"
               >
-                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-700">
+                <h3 className="mb-2 text-sm font-semibold text-slate-800">
                   {row.headingLabel}
                 </h3>
-                <div className="whitespace-pre-wrap break-words text-slate-900">
+                <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-900">
                   {row.parts.map((part, i) => {
                     if (part.added) {
                       return (
@@ -617,6 +1063,12 @@ function Toolbar({ editor }: { editor: Editor }) {
   );
 }
 
+const MOCK_DEFAULT_HTML =
+  "<p>Start drafting your contract here. Use the toolbar for headings, lists, and emphasis. Snapshots are stored in this browser only until you connect Supabase.</p>";
+
+const SUPABASE_DEFAULT_HTML =
+  "<p>Start drafting your collective agreement language here. Format with headings and lists as you would in a word processor. <span class=\"font-medium\">Save draft</span> keeps your working copy; <span class=\"font-medium\">Create snapshot</span> records a formal version for rollback and baseline compare.</p>";
+
 export function ContractEditorPanel({
   negotiationId,
 }: {
@@ -630,25 +1082,36 @@ export function ContractEditorPanel({
         kind: "ready";
         title: string;
         html: string;
+        draftUpdatedAt: string | null;
         latestVersionNumber: number | null;
         contentRevision: number;
         versions: ContractVersionItem[];
       }
   >({ kind: "loading" });
 
-  const [selectedVersionNumber, setSelectedVersionNumber] = useState<
+  /** `null` = preview the live working draft; a number = preview that snapshot. */
+  const [previewSnapshotVersion, setPreviewSnapshotVersion] = useState<
     number | null
   >(null);
-  const [sidePanelMode, setSidePanelMode] = useState<"preview" | "compare">(
-    "preview"
-  );
+  /** Draft review = default proposal workflow (live draft vs baseline snapshot). */
+  const [workspaceTab, setWorkspaceTab] = useState<
+    "draftReview" | "preview" | "historyCompare"
+  >("draftReview");
+  /** `null` = use latest snapshot as draft-review baseline. */
+  const [compareBaselineVersionNumber, setCompareBaselineVersionNumber] =
+    useState<number | null>(null);
+  /** Two snapshot picks for history compare; diff uses min/max version as old→new. */
+  const [historyPickA, setHistoryPickA] = useState<number | null>(null);
+  const [historyPickB, setHistoryPickB] = useState<number | null>(null);
   const [loadedIntoEditorVersion, setLoadedIntoEditorVersion] = useState<
     number | null
   >(null);
 
-  const [saving, setSaving] = useState(false);
+  const [draftSaving, setDraftSaving] = useState(false);
+  const [snapshotSaving, setSnapshotSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [liveEditorHtml, setLiveEditorHtml] = useState("");
 
   const lastAppliedRevision = useRef<number>(-1);
   const previewContentRef = useRef<HTMLDivElement | null>(null);
@@ -657,7 +1120,11 @@ export function ContractEditorPanel({
     setLoadState({ kind: "loading" });
     setSaveError(null);
     setSaveSuccess(null);
-    setSelectedVersionNumber(null);
+    setPreviewSnapshotVersion(null);
+    setWorkspaceTab("draftReview");
+    setCompareBaselineVersionNumber(null);
+    setHistoryPickA(null);
+    setHistoryPickB(null);
     setLoadedIntoEditorVersion(null);
     lastAppliedRevision.current = -1;
 
@@ -675,13 +1142,17 @@ export function ContractEditorPanel({
       const raw = readMockVersions(negotiationId);
       const versions = mockVersionsToItems(raw);
       const latest = versions[0] ?? null;
+      const draftRow = readMockDraft(negotiationId);
       const html =
-        latest?.body_html?.trim() ||
-        "<p>Start drafting your contract here. Use the toolbar for headings, lists, and emphasis. Saved versions are stored in this browser only until you connect Supabase.</p>";
+        (draftRow?.body_html?.trim()
+          ? draftRow.body_html
+          : latest?.body_html?.trim()) || MOCK_DEFAULT_HTML;
+      const draftUpdatedAt = draftRow?.updated_at ?? null;
       setLoadState({
         kind: "ready",
         title: n.title,
         html,
+        draftUpdatedAt,
         latestVersionNumber: latest?.version_number ?? null,
         contentRevision: Date.now(),
         versions,
@@ -691,7 +1162,7 @@ export function ContractEditorPanel({
 
     try {
       const supabase = createSupabaseClient();
-      const [negRes, verRes] = await Promise.all([
+      const [negRes, verRes, draftRes] = await Promise.all([
         supabase
           .from("negotiations")
           .select("title")
@@ -702,6 +1173,11 @@ export function ContractEditorPanel({
           .select("id, version_number, body_html, created_at")
           .eq("negotiation_id", negotiationId)
           .order("version_number", { ascending: false }),
+        supabase
+          .from("negotiation_contract_drafts")
+          .select("body_html, updated_at")
+          .eq("negotiation_id", negotiationId)
+          .maybeSingle(),
       ]);
 
       if (negRes.error) {
@@ -718,17 +1194,44 @@ export function ContractEditorPanel({
         return;
       }
 
+      if (draftRes.error) {
+        setLoadState({ kind: "error", message: draftRes.error.message });
+        return;
+      }
+
       const versions = (verRes.data ?? []) as ContractVersionItem[];
       const latest = versions[0] ?? null;
+      const draftRow = draftRes.data as
+        | { body_html: string; updated_at: string }
+        | null;
 
-      const html =
-        latest?.body_html?.trim() ||
-        "<p>Start drafting your collective agreement language here. Format with headings and lists as you would in a word processor. Each “Save new version” stores a snapshot for this negotiation.</p>";
+      let html =
+        (draftRow?.body_html?.trim() ? draftRow.body_html : null) ??
+        latest?.body_html?.trim() ??
+        SUPABASE_DEFAULT_HTML;
+      let draftUpdatedAt: string | null = draftRow?.updated_at ?? null;
+
+      if (!draftRow) {
+        const upsert = await supabase.from("negotiation_contract_drafts").upsert(
+          {
+            negotiation_id: negotiationId,
+            body_html: html,
+            updated_at: new Date().toISOString(),
+          } as never,
+          { onConflict: "negotiation_id" }
+        );
+        if (upsert.error) {
+          setLoadState({ kind: "error", message: upsert.error.message });
+          return;
+        }
+        draftUpdatedAt = new Date().toISOString();
+      }
 
       setLoadState({
         kind: "ready",
         title: (negRes.data as { title: string }).title,
         html,
+        draftUpdatedAt,
         latestVersionNumber: latest?.version_number ?? null,
         contentRevision: Date.now(),
         versions,
@@ -763,41 +1266,101 @@ export function ContractEditorPanel({
     lastAppliedRevision.current = loadState.contentRevision;
   }, [editor, loadState]);
 
-  const selectedVersion =
-    loadState.kind === "ready" && selectedVersionNumber !== null
+  useEffect(() => {
+    if (!editor || loadState.kind !== "ready") return;
+    const sync = () => setLiveEditorHtml(editor.getHTML());
+    sync();
+    editor.on("update", sync);
+    return () => {
+      editor.off("update", sync);
+    };
+  }, [editor, loadState.kind]);
+
+  const previewSnapshot =
+    loadState.kind === "ready" && previewSnapshotVersion !== null
       ? loadState.versions.find(
-          (v) => v.version_number === selectedVersionNumber
+          (v) => v.version_number === previewSnapshotVersion
         ) ?? null
       : null;
 
-  const previousVersion =
+  const effectiveBaselineVersionNumber =
+    loadState.kind === "ready"
+      ? compareBaselineVersionNumber ??
+        loadState.versions[0]?.version_number ??
+        null
+      : null;
+
+  const baselineVersionRow =
+    loadState.kind === "ready" && effectiveBaselineVersionNumber !== null
+      ? loadState.versions.find(
+          (v) => v.version_number === effectiveBaselineVersionNumber
+        ) ?? loadState.versions[0] ?? null
+      : null;
+
+  const baselineHtml = baselineVersionRow?.body_html ?? "";
+  const baselineLabel = baselineVersionRow
+    ? `snapshot version ${baselineVersionRow.version_number}`
+    : "your baseline (no snapshot saved yet)";
+
+  const defaultHistA =
+    loadState.kind === "ready" && loadState.versions.length >= 2
+      ? loadState.versions[1]!.version_number
+      : null;
+  const defaultHistB =
+    loadState.kind === "ready" && loadState.versions.length >= 2
+      ? loadState.versions[0]!.version_number
+      : null;
+
+  const effectiveHistA =
     loadState.kind === "ready" &&
-    selectedVersion &&
-    selectedVersion.version_number > 1
-      ? loadState.versions.find(
-          (v) => v.version_number === selectedVersion.version_number - 1
-        ) ?? null
+    historyPickA != null &&
+    loadState.versions.some((v) => v.version_number === historyPickA)
+      ? historyPickA
+      : defaultHistA;
+  const effectiveHistB =
+    loadState.kind === "ready" &&
+    historyPickB != null &&
+    loadState.versions.some((v) => v.version_number === historyPickB)
+      ? historyPickB
+      : defaultHistB;
+
+  const histVLo =
+    effectiveHistA != null && effectiveHistB != null
+      ? Math.min(effectiveHistA, effectiveHistB)
+      : null;
+  const histVHi =
+    effectiveHistA != null && effectiveHistB != null
+      ? Math.max(effectiveHistA, effectiveHistB)
       : null;
 
-  const outlineTargetsPreview =
-    selectedVersion !== null && sidePanelMode === "preview";
+  const historyOlderRow =
+    loadState.kind === "ready" && histVLo != null
+      ? loadState.versions.find((v) => v.version_number === histVLo) ?? null
+      : null;
+  const historyNewerRow =
+    loadState.kind === "ready" && histVHi != null
+      ? loadState.versions.find((v) => v.version_number === histVHi) ?? null
+      : null;
+
+  const outlineTargetsSnapshotPreview =
+    workspaceTab === "preview" && previewSnapshotVersion !== null;
 
   const previewOutline = useMemo(() => {
-    if (!outlineTargetsPreview || !selectedVersion) return [];
-    return extractHeadingsFromHtml(selectedVersion.body_html);
-  }, [outlineTargetsPreview, selectedVersion]);
+    if (!outlineTargetsSnapshotPreview || !previewSnapshot) return [];
+    return extractHeadingsFromHtml(previewSnapshot.body_html);
+  }, [outlineTargetsSnapshotPreview, previewSnapshot]);
 
   const editorOutlineLive = useEditorState({
     editor,
     selector: ({ editor: ed }) => (ed ? extractHeadingsFromEditor(ed) : []),
   });
 
-  const outlineItems: HeadingOutlineItem[] = outlineTargetsPreview
+  const outlineItems: HeadingOutlineItem[] = outlineTargetsSnapshotPreview
     ? previewOutline
     : (editorOutlineLive ?? []);
 
   function handleOutlineNavigate(index: number) {
-    if (outlineTargetsPreview) {
+    if (outlineTargetsSnapshotPreview) {
       scrollToHeadingInRoot(previewContentRef.current, index);
       return;
     }
@@ -807,7 +1370,7 @@ export function ContractEditorPanel({
     }
   }
 
-  async function handleSaveNewVersion() {
+  async function handleSaveDraft() {
     if (!editor || loadState.kind !== "ready") return;
     setSaveError(null);
     setSaveSuccess(null);
@@ -820,8 +1383,74 @@ export function ContractEditorPanel({
     }
 
     const bodyHtml = editor.getHTML();
+    const nowIso = new Date().toISOString();
 
-    setSaving(true);
+    setDraftSaving(true);
+    try {
+      if (!isSupabaseConfigured()) {
+        writeMockDraft(negotiationId, bodyHtml, nowIso);
+        setLoadState((prev) =>
+          prev.kind === "ready"
+            ? { ...prev, draftUpdatedAt: nowIso }
+            : prev
+        );
+        setLoadedIntoEditorVersion(null);
+        setSaveSuccess("Working draft saved (this browser only).");
+        return;
+      }
+
+      const supabase = createSupabaseClient();
+      const { error } = await supabase
+        .from("negotiation_contract_drafts")
+        .upsert(
+          {
+            negotiation_id: negotiationId,
+            body_html: bodyHtml,
+            updated_at: nowIso,
+          } as never,
+          { onConflict: "negotiation_id" }
+        );
+
+      if (error) {
+        setSaveError(friendlyDraftUpsertError(error));
+        return;
+      }
+
+      setLoadState((prev) =>
+        prev.kind === "ready"
+          ? { ...prev, draftUpdatedAt: nowIso }
+          : prev
+      );
+      setLoadedIntoEditorVersion(null);
+      setSaveSuccess(
+        `Working draft saved · ${formatDate(nowIso)}`
+      );
+    } catch (e) {
+      setSaveError(
+        e instanceof Error
+          ? e.message.trim() || "Save failed."
+          : "Save failed."
+      );
+    } finally {
+      setDraftSaving(false);
+    }
+  }
+
+  async function handleCreateSnapshot() {
+    if (!editor || loadState.kind !== "ready") return;
+    setSaveError(null);
+    setSaveSuccess(null);
+
+    if (editor.isEmpty) {
+      setSaveError(
+        "Add contract text before creating a snapshot. The document cannot be empty."
+      );
+      return;
+    }
+
+    const bodyHtml = editor.getHTML();
+
+    setSnapshotSaving(true);
     try {
       const nextVersion = (loadState.latestVersionNumber ?? 0) + 1;
 
@@ -840,12 +1469,8 @@ export function ContractEditorPanel({
             : prev
         );
         setLoadedIntoEditorVersion(null);
-        if (nextVersion >= 2) {
-          setSelectedVersionNumber(nextVersion);
-          setSidePanelMode("compare");
-        }
         setSaveSuccess(
-          `Saved version ${nextVersion} (stored locally in this browser).`
+          `Snapshot version ${nextVersion} created (stored locally in this browser).`
         );
         return;
       }
@@ -877,12 +1502,8 @@ export function ContractEditorPanel({
         };
       });
       setLoadedIntoEditorVersion(null);
-      if (nextVersion >= 2) {
-        setSelectedVersionNumber(nextVersion);
-        setSidePanelMode("compare");
-      }
       setSaveSuccess(
-        `Saved version ${nextVersion} at ${formatDate(new Date().toISOString())}.`
+        `Snapshot version ${nextVersion} · ${formatDate(new Date().toISOString())}`
       );
     } catch (e) {
       setSaveError(
@@ -891,16 +1512,56 @@ export function ContractEditorPanel({
           : "Save failed."
       );
     } finally {
-      setSaving(false);
+      setSnapshotSaving(false);
     }
   }
 
-  function handleLoadVersionIntoEditor(version: ContractVersionItem) {
+  async function persistDraftFromHtml(bodyHtml: string) {
+    const nowIso = new Date().toISOString();
+    if (!isSupabaseConfigured()) {
+      writeMockDraft(negotiationId, bodyHtml, nowIso);
+      setLoadState((prev) =>
+        prev.kind === "ready"
+          ? { ...prev, draftUpdatedAt: nowIso, html: bodyHtml }
+          : prev
+      );
+      return;
+    }
+    const supabase = createSupabaseClient();
+    const { error } = await supabase.from("negotiation_contract_drafts").upsert(
+      {
+        negotiation_id: negotiationId,
+        body_html: bodyHtml,
+        updated_at: nowIso,
+      } as never,
+      { onConflict: "negotiation_id" }
+    );
+    if (error) throw new Error(friendlyDraftUpsertError(error));
+    setLoadState((prev) =>
+      prev.kind === "ready"
+        ? { ...prev, draftUpdatedAt: nowIso, html: bodyHtml }
+        : prev
+    );
+  }
+
+  async function handleLoadVersionIntoEditor(version: ContractVersionItem) {
     if (!editor) return;
-    editor.commands.setContent(version.body_html);
-    setLoadedIntoEditorVersion(version.version_number);
     setSaveError(null);
     setSaveSuccess(null);
+    editor.commands.setContent(version.body_html);
+    setLoadedIntoEditorVersion(version.version_number);
+    try {
+      await persistDraftFromHtml(version.body_html);
+      setSaveSuccess(
+        `Loaded snapshot ${version.version_number} into the editor; working draft updated.`
+      );
+    } catch (e) {
+      setSaveError(
+        e instanceof Error
+          ? e.message.trim() || "Could not update working draft."
+          : "Could not update working draft."
+      );
+    }
   }
 
   if (loadState.kind === "loading") {
@@ -970,7 +1631,7 @@ export function ContractEditorPanel({
     );
   }
 
-  const { title, latestVersionNumber, versions } = loadState;
+  const { title, latestVersionNumber, versions, draftUpdatedAt } = loadState;
 
   return (
     <>
@@ -995,9 +1656,9 @@ export function ContractEditorPanel({
       {!isSupabaseConfigured() ? (
         <Card className="mb-4 border-amber-200 bg-amber-50/80">
           <p className="text-sm text-amber-950/90">
-            Supabase is not configured. Versions are saved only in this browser
-            (local storage) for demo. Connect Supabase to persist contract
-            versions in the database.
+            Supabase is not configured. Working drafts and snapshots are stored
+            only in this browser (local storage) for demo. Connect Supabase to
+            persist them in the database.
           </p>
         </Card>
       ) : null}
@@ -1009,9 +1670,9 @@ export function ContractEditorPanel({
               Articles &amp; sections
             </h2>
             <p className="mt-1 text-xs text-slate-500">
-              {outlineTargetsPreview && selectedVersion
-                ? `Headings from version ${selectedVersion.version_number} preview`
-                : "Headings in your working copy"}
+              {outlineTargetsSnapshotPreview && previewSnapshot
+                ? `Headings from version ${previewSnapshot.version_number} preview`
+                : "Headings in your working draft"}
             </p>
             {outlineItems.length === 0 ? (
               <p className="mt-3 text-sm text-slate-600">
@@ -1022,7 +1683,7 @@ export function ContractEditorPanel({
             ) : (
               <ul className="mt-3 max-h-60 space-y-0.5 overflow-y-auto border-t border-slate-100 pt-3 lg:max-h-[min(70vh,32rem)]">
                 {outlineItems.map((h) => (
-                  <li key={`${outlineTargetsPreview ? "p" : "e"}-${h.index}`}>
+                  <li key={`${outlineTargetsSnapshotPreview ? "p" : "e"}-${h.index}`}>
                     <button
                       type="button"
                       onClick={() => handleOutlineNavigate(h.index)}
@@ -1040,32 +1701,45 @@ export function ContractEditorPanel({
 
           <div className="min-w-0 flex-1 space-y-4">
             <Card className="p-0">
-            <div className="border-b border-slate-100 px-4 py-3 sm:flex sm:items-center sm:justify-between sm:gap-4">
-              <div>
+            <div className="border-b border-slate-100 px-4 py-3 sm:flex sm:flex-wrap sm:items-start sm:justify-between sm:gap-4">
+              <div className="min-w-0">
                 <p className="text-sm font-medium text-slate-900">
-                  Working copy
+                  Working draft
                 </p>
                 <p className="mt-0.5 text-xs text-slate-500">
+                  {draftUpdatedAt
+                    ? `Draft last saved ${formatDate(draftUpdatedAt)}.`
+                    : "Draft not saved to storage yet."}{" "}
                   {latestVersionNumber !== null
-                    ? `Latest saved version: ${latestVersionNumber}. Saving creates version ${latestVersionNumber + 1}.`
-                    : "No saved version yet. Saving creates version 1."}
+                    ? `Latest snapshot: v${latestVersionNumber}.`
+                    : "No snapshots yet — create one when you reach a checkpoint."}
                 </p>
                 {loadedIntoEditorVersion !== null ? (
                   <p className="mt-1.5 text-xs text-slate-600">
-                    Editing from saved version {loadedIntoEditorVersion}. Save a
-                    new version when ready; this does not overwrite the saved
+                    Started from snapshot {loadedIntoEditorVersion}. Your edits
+                    live in the working draft until you save it or create a new
                     snapshot.
                   </p>
                 ) : null}
               </div>
-              <button
-                type="button"
-                disabled={saving || !editor}
-                onClick={() => void handleSaveNewVersion()}
-                className="mt-3 w-full shrink-0 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-50 sm:mt-0 sm:w-auto"
-              >
-                {saving ? "Saving…" : "Save new version"}
-              </button>
+              <div className="mt-3 flex w-full shrink-0 flex-col gap-2 sm:mt-0 sm:w-auto sm:flex-row">
+                <button
+                  type="button"
+                  disabled={draftSaving || !editor}
+                  onClick={() => void handleSaveDraft()}
+                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-50 sm:w-auto"
+                >
+                  {draftSaving ? "Saving draft…" : "Save draft"}
+                </button>
+                <button
+                  type="button"
+                  disabled={snapshotSaving || !editor}
+                  onClick={() => void handleCreateSnapshot()}
+                  className="w-full rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-50 sm:w-auto"
+                >
+                  {snapshotSaving ? "Creating…" : "Create snapshot"}
+                </button>
+              </div>
             </div>
 
             {saveSuccess ? (
@@ -1090,42 +1764,60 @@ export function ContractEditorPanel({
         <div className="w-full shrink-0 space-y-4 xl:w-80">
           <Card>
             <h2 className="text-sm font-semibold text-slate-900">
-              Version history
+              Snapshot milestones
             </h2>
             <p className="mt-1 text-xs text-slate-500">
-              Newest first. Select a version to preview or compare to the one
-              before it.
+              Checkpoints for rollback and baselines. Proposal review uses your
+              live working draft against one of these snapshots.
             </p>
             {versions.length === 0 ? (
               <p className="mt-4 text-sm text-slate-600">
-                No saved versions yet. Use “Save new version” to create version
-                1.
+                No snapshots yet. Use <span className="font-medium">Create snapshot</span>{" "}
+                when you reach a milestone.
               </p>
             ) : (
-              <ul className="mt-4 max-h-[min(50vh,22rem)] space-y-1 overflow-y-auto border-t border-slate-100 pt-3">
+              <ul className="mt-4 max-h-[min(46vh,20rem)] space-y-2 overflow-y-auto border-t border-slate-100 pt-3">
                 {versions.map((v) => {
-                  const selected = selectedVersionNumber === v.version_number;
+                  const previewing =
+                    workspaceTab === "preview" &&
+                    previewSnapshotVersion === v.version_number;
                   return (
-                    <li key={v.id}>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedVersionNumber(v.version_number);
-                          setSidePanelMode("preview");
-                        }}
-                        className={`w-full rounded-lg border px-3 py-2.5 text-left text-sm transition-colors ${
-                          selected
-                            ? "border-slate-900 bg-slate-50"
-                            : "border-slate-200 bg-white hover:border-slate-300 hover:bg-slate-50/80"
-                        }`}
-                      >
-                        <span className="font-medium text-slate-900">
+                    <li
+                      key={v.id}
+                      className="rounded-lg border border-slate-200 bg-white p-2.5 shadow-sm"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-slate-900">
                           Version {v.version_number}
-                        </span>
-                        <span className="mt-0.5 block text-xs text-slate-500">
+                        </p>
+                        <p className="text-xs text-slate-500">
                           {formatDate(v.created_at)}
-                        </span>
-                      </button>
+                        </p>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPreviewSnapshotVersion(v.version_number);
+                            setWorkspaceTab("preview");
+                          }}
+                          className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                            previewing
+                              ? "bg-slate-900 text-white"
+                              : "border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100"
+                          }`}
+                        >
+                          Preview
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!editor}
+                          onClick={() => void handleLoadVersionIntoEditor(v)}
+                          className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                        >
+                          Load into editor
+                        </button>
+                      </div>
                     </li>
                   );
                 })}
@@ -1133,92 +1825,343 @@ export function ContractEditorPanel({
             )}
           </Card>
 
-          {selectedVersion ? (
-            <Card>
-              <div className="flex flex-wrap gap-2 border-b border-slate-100 pb-3">
-                <button
-                  type="button"
-                  onClick={() => setSidePanelMode("preview")}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                    sidePanelMode === "preview"
-                      ? "bg-slate-900 text-white"
-                      : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                >
-                  Preview
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSidePanelMode("compare")}
-                  disabled={selectedVersion.version_number < 2}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-                    sidePanelMode === "compare"
-                      ? "bg-slate-900 text-white"
-                      : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                  }`}
-                >
-                  Compare to previous
-                </button>
-              </div>
-
-              <p className="mt-3 text-xs text-slate-500">
-                Version {selectedVersion.version_number} ·{" "}
-                {formatDate(selectedVersion.created_at)}
-              </p>
-
+          <Card>
+            <h2 className="text-sm font-semibold text-slate-900">
+              Review workspace
+            </h2>
+            <p className="mt-1 text-xs text-slate-500">
+              Draft review is the default: proposals from current edits vs a
+              baseline snapshot. Use history compare for two saved versions
+              only.
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2 border-b border-slate-100 pb-3">
               <button
                 type="button"
-                disabled={!editor}
-                onClick={() => handleLoadVersionIntoEditor(selectedVersion)}
-                className="mt-3 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 disabled:opacity-50"
+                onClick={() => setWorkspaceTab("draftReview")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  workspaceTab === "draftReview"
+                    ? "bg-slate-900 text-white"
+                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
               >
-                Open in editor
+                Draft review
               </button>
+              <button
+                type="button"
+                onClick={() => setWorkspaceTab("preview")}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  workspaceTab === "preview"
+                    ? "bg-slate-900 text-white"
+                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                Preview
+              </button>
+              <button
+                type="button"
+                onClick={() => setWorkspaceTab("historyCompare")}
+                disabled={versions.length < 2}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                  workspaceTab === "historyCompare"
+                    ? "bg-slate-900 text-white"
+                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                History compare
+              </button>
+            </div>
 
-              {sidePanelMode === "preview" ? (
-                <div className="mt-4">
-                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Read-only preview
-                  </p>
-                  <div
-                    ref={previewContentRef}
-                    className="contract-editor-rich-preview max-h-[min(60vh,28rem)] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/40 p-4 text-sm leading-relaxed text-slate-800 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:text-slate-600 [&_h1]:mt-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold [&_p]:my-2"
-                    dangerouslySetInnerHTML={{
-                      __html: selectedVersion.body_html,
-                    }}
-                  />
-                </div>
-              ) : previousVersion ? (
-                <div className="mt-4">
-                  <ContractCompareView
-                    previousHtml={previousVersion.body_html}
-                    selectedHtml={selectedVersion.body_html}
-                  />
-                </div>
-              ) : (
-                <p className="mt-4 text-sm text-slate-600">
-                  There is no previous version to compare (version 1 is the
-                  first snapshot).
+            {workspaceTab === "draftReview" ? (
+              <div className="mt-3 space-y-3">
+                <p className="text-xs leading-relaxed text-slate-600">
+                  The panel below compares the{" "}
+                  <span className="font-medium text-slate-800">
+                    working draft
+                  </span>{" "}
+                  (editor, including unsaved text) to the baseline you choose.
+                  Select proposal candidates there—no need to open older
+                  versions first.
                 </p>
-              )}
+                {versions.length > 1 ? (
+                  <div>
+                    <label
+                      htmlFor="compare-baseline-select"
+                      className="block text-xs font-semibold text-slate-700"
+                    >
+                      Baseline snapshot
+                    </label>
+                    <select
+                      id="compare-baseline-select"
+                      value={
+                        compareBaselineVersionNumber ??
+                        versions[0]!.version_number
+                      }
+                      onChange={(e) => {
+                        const n = Number(e.target.value);
+                        const latestNum = versions[0]!.version_number;
+                        setCompareBaselineVersionNumber(
+                          n === latestNum ? null : n
+                        );
+                      }}
+                      className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400/30"
+                    >
+                      {versions.map((v) => (
+                        <option key={v.id} value={v.version_number}>
+                          Version {v.version_number}
+                          {v.version_number === versions[0]!.version_number
+                            ? " (latest — default baseline)"
+                            : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : versions.length === 1 ? (
+                  <p className="text-xs text-slate-500">
+                    Baseline: version {versions[0]!.version_number}. When you add
+                    more snapshots, you can pick which one to draft against.
+                  </p>
+                ) : (
+                  <p className="text-xs text-amber-900/90">
+                    Create a snapshot first. Then draft review can compare your
+                    working copy to that milestone.
+                  </p>
+                )}
+              </div>
+            ) : workspaceTab === "preview" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreviewSnapshotVersion(null);
+                    setWorkspaceTab("preview");
+                  }}
+                  className={`mt-3 w-full rounded-lg border px-3 py-2.5 text-left text-sm font-medium transition-colors ${
+                    previewSnapshotVersion === null
+                      ? "border-slate-900 bg-slate-50 text-slate-900"
+                      : "border-slate-200 bg-white text-slate-700 hover:border-slate-300 hover:bg-slate-50/80"
+                  }`}
+                >
+                  Working draft (live)
+                </button>
+                {previewSnapshotVersion === null ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Mirror of the editor, including changes you have not saved as
+                    a draft yet.
+                  </p>
+                ) : previewSnapshot ? (
+                  <p className="mt-2 text-xs text-slate-500">
+                    Snapshot version {previewSnapshot.version_number} ·{" "}
+                    {formatDate(previewSnapshot.created_at)}
+                  </p>
+                ) : null}
+
+                {previewSnapshotVersion === null ? (
+                  <div className="mt-4">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Read-only preview
+                    </p>
+                    <div
+                      ref={previewContentRef}
+                      className="contract-editor-rich-preview max-h-[min(60vh,28rem)] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/40 p-4 text-sm leading-relaxed text-slate-800 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:text-slate-600 [&_h1]:mt-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold [&_p]:my-2"
+                      dangerouslySetInnerHTML={{
+                        __html:
+                          liveEditorHtml.trim() ||
+                          "<p class=\"text-slate-500\">Start typing in the editor.</p>",
+                      }}
+                    />
+                  </div>
+                ) : previewSnapshot ? (
+                  <div className="mt-4">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+                      Read-only preview
+                    </p>
+                    <div
+                      ref={previewContentRef}
+                      className="contract-editor-rich-preview max-h-[min(60vh,28rem)] overflow-y-auto rounded-lg border border-slate-200 bg-slate-50/40 p-4 text-sm leading-relaxed text-slate-800 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:text-slate-600 [&_h1]:mt-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h2]:mt-2 [&_h2]:text-base [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:text-sm [&_h3]:font-semibold [&_p]:my-2"
+                      dangerouslySetInnerHTML={{
+                        __html: previewSnapshot.body_html,
+                      }}
+                    />
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="mt-3 space-y-3">
+                <p className="text-xs leading-relaxed text-slate-600">
+                  Redline between two saved snapshots (working draft is not
+                  included). Use for audit or rollback review. For proposals from
+                  current edits, switch to{" "}
+                  <span className="font-medium text-slate-800">Draft review</span>
+                  .
+                </p>
+                {versions.length >= 2 ? (
+                  <>
+                    <div>
+                      <label
+                        htmlFor="history-compare-a"
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        Snapshot A
+                      </label>
+                      <select
+                        id="history-compare-a"
+                        value={effectiveHistA ?? versions[0]!.version_number}
+                        onChange={(e) =>
+                          setHistoryPickA(Number(e.target.value))
+                        }
+                        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400/30"
+                      >
+                        {versions.map((v) => (
+                          <option key={`ha-${v.id}`} value={v.version_number}>
+                            Version {v.version_number}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="history-compare-b"
+                        className="block text-xs font-semibold text-slate-700"
+                      >
+                        Snapshot B
+                      </label>
+                      <select
+                        id="history-compare-b"
+                        value={effectiveHistB ?? versions[0]!.version_number}
+                        onChange={(e) =>
+                          setHistoryPickB(Number(e.target.value))
+                        }
+                        className="mt-1.5 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400/30"
+                      >
+                        {versions.map((v) => (
+                          <option key={`hb-${v.id}`} value={v.version_number}>
+                            Version {v.version_number}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      Diff direction: earlier version number → later (green =
+                      added in the later snapshot).
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs text-amber-900/90">
+                    Add a second snapshot to compare two milestones.
+                  </p>
+                )}
+              </div>
+            )}
+          </Card>
+        </div>
+      </div>
+
+      {loadState.kind === "ready" && workspaceTab === "draftReview" ? (
+        <div className="mt-10 w-full min-w-0">
+          <Card className="overflow-hidden p-0">
+            <div className="border-b border-slate-200 bg-slate-100/90 px-4 py-4 sm:px-6 sm:py-5">
+              <h2 className="text-lg font-semibold tracking-tight text-slate-900 sm:text-xl">
+                Draft review &amp; proposals
+              </h2>
+              <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                {baselineVersionRow ? (
+                  <>
+                    <span className="font-semibold text-slate-800">
+                      Working draft
+                    </span>{" "}
+                    vs{" "}
+                    <span className="font-semibold text-slate-800">
+                      Version {baselineVersionRow.version_number}
+                    </span>{" "}
+                    (baseline). The editor is the source of truth for the left
+                    side of the redline; adjust the baseline in the sidebar if
+                    needed.
+                  </>
+                ) : (
+                  <>
+                    <span className="font-semibold text-slate-800">
+                      Working draft
+                    </span>{" "}
+                    is ready; create a{" "}
+                    <span className="font-semibold text-slate-800">
+                      snapshot
+                    </span>{" "}
+                    so proposal review has a baseline to diff against.
+                  </>
+                )}
+              </p>
+            </div>
+            <div className="p-4 sm:p-6 lg:p-8">
+              <ContractCompareView
+                key={`${negotiationId}-${baselineVersionRow?.id ?? "none"}-${compareBaselineVersionNumber ?? "latest"}-draft`}
+                negotiationId={negotiationId}
+                baselineHtml={baselineHtml}
+                workingDraftHtml={liveEditorHtml}
+                baselineLabel={baselineLabel}
+                showProposalReview
+                compareContextLine={
+                  baselineVersionRow
+                    ? `Working draft vs Version ${baselineVersionRow.version_number}`
+                    : "Working draft — add a snapshot to set a proposal baseline"
+                }
+              />
+            </div>
+          </Card>
+        </div>
+      ) : null}
+
+      {loadState.kind === "ready" && workspaceTab === "historyCompare" ? (
+        <div className="mt-10 w-full min-w-0">
+          {versions.length >= 2 &&
+          historyOlderRow &&
+          historyNewerRow &&
+          histVLo != null &&
+          histVHi != null ? (
+            <Card className="overflow-hidden p-0">
+              <div className="border-b border-slate-200 bg-slate-100/90 px-4 py-4 sm:px-6 sm:py-5">
+                <h2 className="text-lg font-semibold tracking-tight text-slate-900 sm:text-xl">
+                  History compare (snapshots only)
+                </h2>
+                <p className="mt-1 max-w-3xl text-sm text-slate-600">
+                  <span className="font-semibold text-slate-800">
+                    Version {histVLo}
+                  </span>{" "}
+                  vs{" "}
+                  <span className="font-semibold text-slate-800">
+                    Version {histVHi}
+                  </span>
+                  . Redline only—use draft review to build proposals from your
+                  current edits.
+                </p>
+              </div>
+              <div className="p-4 sm:p-6 lg:p-8">
+                <ContractCompareView
+                  key={`${negotiationId}-hist-${histVLo}-${histVHi}`}
+                  negotiationId={negotiationId}
+                  baselineHtml={historyOlderRow.body_html}
+                  workingDraftHtml={historyNewerRow.body_html}
+                  baselineLabel={`version ${histVLo}`}
+                  showProposalReview={false}
+                  compareContextLine={`Version ${histVLo} vs Version ${histVHi} (saved snapshots)`}
+                />
+              </div>
             </Card>
           ) : (
             <Card>
               <p className="text-sm text-slate-600">
-                Select a version in the history to see a read-only preview, run
-                a simple redline against the prior version, or open it in the
-                editor as your working copy.
+                History compare needs at least two snapshots. Create another
+                checkpoint, then pick two versions in the sidebar.
               </p>
             </Card>
           )}
         </div>
-      </div>
+      ) : null}
 
       <p className="mt-4 text-xs text-slate-500">
         Redlines pair sections by heading (with fuzzy matching), then compare
         plain text per section (strike/del markup counts as deleted language).
-        Later work can tie diffs to formal proposals and finer-grained track
-        changes.
+        Draft review diffs your live editor against a baseline snapshot;
+        history compare diffs two saved snapshots.
       </p>
     </>
   );

@@ -110,6 +110,26 @@ describe("buildSectionDiffRows", () => {
     expect(added.parts.some((p) => p.added)).toBe(true);
   });
 
+  it("attaches newBodyHtml from the new side preserving rich markup", () => {
+    const prev = contractHtml(undefined, [
+      { heading: "Article A", body: "alpha" },
+    ]);
+    const next =
+      "<h2>Article A</h2><p>alpha <strong>bold</strong> change</p>";
+    const rows = buildSectionDiffRows(prev, next);
+    const row = rows.find((r) => r.headingLabel === "Article A")!;
+    expect(row.newBodyHtml).toContain("<strong>");
+    expect(row.newBodyHtml).toContain("bold");
+  });
+
+  it("unwraps a single wrapper div when slicing section body HTML", () => {
+    const prev = contractHtml(undefined, [{ heading: "A", body: "old" }]);
+    const next = "<div><h2>A</h2><p>new <em>x</em></p></div>";
+    const rows = buildSectionDiffRows(prev, next);
+    const row = rows.find((r) => r.headingLabel === "A")!;
+    expect(row.newBodyHtml).toBe("<p>new <em>x</em></p>");
+  });
+
   it("treats a heading that exists only in the old version as removed", () => {
     const prev = contractHtml(undefined, [
       { heading: "Article A", body: "stays" },

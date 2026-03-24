@@ -15,6 +15,11 @@ export type SectionDiffRow = {
   addedChars: number;
   removedChars: number;
   hasChange: boolean;
+  /**
+   * HTML body for this section on the “new” side (`selectedHtml`): top-level nodes after each
+   * h1–h3 until the next heading (preamble = nodes before the first h1–h3). Preserves TipTap markup.
+   */
+  newBodyHtml: string;
 };
 
 type HeadedBlock = { heading: string; plain: string };
@@ -23,6 +28,31 @@ type HeadedBlock = { heading: string; plain: string };
 const HEADING_FUZZY_THRESHOLD = 0.82;
 
 const STRIKE_TAGS = new Set(["s", "strike", "del"]);
+
+function getContractEditorTopLevelElementsFromWrap(wrap: HTMLElement): HTMLElement[] {
+  let nodes = Array.from(wrap.children) as HTMLElement[];
+  if (nodes.length === 1 && nodes[0]!.tagName.toLowerCase() === "div") {
+    const inner = Array.from(nodes[0]!.children) as HTMLElement[];
+    const looksLikeBlocks = inner.some((el) => {
+      const t = el.tagName.toLowerCase();
+      return (
+        t === "p" ||
+        t === "h1" ||
+        t === "h2" ||
+        t === "h3" ||
+        t === "ul" ||
+        t === "ol" ||
+        t === "blockquote" ||
+        t === "pre" ||
+        t === "hr"
+      );
+    });
+    if (looksLikeBlocks && inner.length > 0) {
+      return inner;
+    }
+  }
+  return nodes;
+}
 
 /**
  * Plain text for comparison: like visible text, but entire &lt;s&gt;, &lt;strike&gt;,
@@ -98,7 +128,7 @@ export function buildContractSections(html: string): ContractSection[] {
     current = null;
   }
 
-  const children = Array.from(wrap.children);
+  const children = getContractEditorTopLevelElementsFromWrap(wrap);
   if (children.length === 0) {
     const t = plainTextExcludingStrike(wrap);
     if (t) return [{ heading: null, plain: t }];
@@ -217,7 +247,8 @@ function buildDiffRow(
   index: number,
   headingLabel: string,
   prevPlain: string,
-  nextPlain: string
+  nextPlain: string,
+  newBodyHtml: string
 ): SectionDiffRow {
   const parts = diffWordsWithSpace(prevPlain, nextPlain);
   const stats = analyzeParts(parts);
@@ -231,7 +262,56 @@ function buildDiffRow(
     parts,
     ...stats,
     hasChange,
+    newBodyHtml,
   };
+}
+
+/**
+ * Split contract HTML like {@link buildContractSections}, but keep raw `outerHTML` for each
+ * section body (excludes the heading elements themselves).
+ */
+export function extractContractSectionBodyHtmlSlices(html: string): {
+  preambleHtml: string;
+  headedBodyHtmls: string[];
+} {
+  if (typeof document === "undefined") {
+    return { preambleHtml: "", headedBodyHtmls: [] };
+  }
+  const wrap = document.createElement("div");
+  wrap.innerHTML = html.trim() ? html : "";
+  const children = getContractEditorTopLevelElementsFromWrap(wrap);
+
+  if (children.length === 0) {
+    const inner = wrap.innerHTML.trim();
+    return { preambleHtml: inner, headedBodyHtmls: [] };
+  }
+
+  const preambleParts: string[] = [];
+  const headedBodyHtmls: string[] = [];
+  let currentBodyParts: string[] = [];
+  let seenFirstHeading = false;
+
+  for (const el of children) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === "h1" || tag === "h2" || tag === "h3") {
+      if (!seenFirstHeading) {
+        seenFirstHeading = true;
+      } else {
+        headedBodyHtmls.push(currentBodyParts.join(""));
+        currentBodyParts = [];
+      }
+    } else if (!seenFirstHeading) {
+      preambleParts.push(el.outerHTML);
+    } else {
+      currentBodyParts.push(el.outerHTML);
+    }
+  }
+
+  if (!seenFirstHeading) {
+    return { preambleHtml: preambleParts.join(""), headedBodyHtmls: [] };
+  }
+  headedBodyHtmls.push(currentBodyParts.join(""));
+  return { preambleHtml: preambleParts.join(""), headedBodyHtmls };
 }
 
 type HeadingPair = { oldIdx: number; newIdx: number; sim: number };
@@ -323,6 +403,7 @@ export function buildSectionDiffRows(
 ): SectionDiffRow[] {
   const prev = buildContractSections(previousHtml);
   const next = buildContractSections(selectedHtml);
+  const slices = extractContractSectionBodyHtmlSlices(selectedHtml);
 
   const prevPh = extractPreambleAndHeaded(prev);
   const nextPh = extractPreambleAndHeaded(next);
@@ -336,6 +417,10 @@ export function buildSectionDiffRows(
   if (emptyDoc) {
     const parts = diffWordsWithSpace("", "");
     const stats = analyzeParts(parts);
+    const fallbackHtml =
+      slices.preambleHtml ||
+      slices.headedBodyHtmls.join("") ||
+      selectedHtml.trim();
     return [
       {
         index: 0,
@@ -343,6 +428,7 @@ export function buildSectionDiffRows(
         parts,
         ...stats,
         hasChange: false,
+        newBodyHtml: fallbackHtml,
       },
     ];
   }
@@ -363,12 +449,14 @@ export function buildSectionDiffRows(
       rowIndex++,
       "Preamble (before first heading)",
       prevPh.preamblePlain,
-      nextPh.preamblePlain
+      nextPh.preamblePlain,
+      slices.preambleHtml
     )
   );
 
   for (let ni = 0; ni < nextPh.headed.length; ni++) {
     const newBlock = nextPh.headed[ni]!;
+    const bodyHtml = slices.headedBodyHtmls[ni] ?? "";
     const oi = newToOld.get(ni);
     if (oi !== undefined) {
       const oldBlock = prevPh.headed[oi]!;
@@ -377,12 +465,13 @@ export function buildSectionDiffRows(
           rowIndex++,
           matchedHeadingLabel(oldBlock.heading, newBlock.heading),
           oldBlock.plain,
-          newBlock.plain
+          newBlock.plain,
+          bodyHtml
         )
       );
     } else {
       rows.push(
-        buildDiffRow(rowIndex++, newBlock.heading, "", newBlock.plain)
+        buildDiffRow(rowIndex++, newBlock.heading, "", newBlock.plain, bodyHtml)
       );
     }
   }
@@ -395,6 +484,7 @@ export function buildSectionDiffRows(
         rowIndex++,
         `${oldBlock.heading} (removed)`,
         oldBlock.plain,
+        "",
         ""
       )
     );
@@ -429,4 +519,252 @@ export function sumChangeTotals(rows: SectionDiffRow[]): {
       removedChars: 0,
     }
   );
+}
+
+/** Plain side of the diff (new document) from `diff` parts. */
+function newSidePlainFromParts(parts: Change[]): string {
+  let s = "";
+  for (const p of parts) {
+    if (!p.removed) s += p.value;
+  }
+  return s;
+}
+
+/**
+ * Same visible plain as {@link buildContractSections} uses per top-level block,
+ * joined with `\n\n` (must match `extractPreambleAndHeaded` / diff `nextPlain`).
+ */
+function sectionBodyPlainFromHtmlSliceRoot(root: HTMLElement): string {
+  const children = getContractEditorTopLevelElementsFromWrap(root);
+  if (children.length === 0) {
+    return plainTextExcludingStrike(root).replace(/\u00a0/g, " ").trim();
+  }
+  let acc = "";
+  for (const el of children) {
+    const t = plainTextExcludingStrike(el);
+    if (t) acc = acc ? `${acc}\n\n${t}` : t;
+  }
+  return acc.replace(/\u00a0/g, " ").trim();
+}
+
+function collapseWhitespaceTrimWithProv(
+  str: string,
+  prov: Array<{ node: Text; offset: number }>
+): { plain: string; prov: Array<{ node: Text; offset: number }> } {
+  const outCh: string[] = [];
+  const outProv: Array<{ node: Text; offset: number }> = [];
+  let i = 0;
+  const n = str.length;
+  while (i < n && /\s/.test(str[i]!)) i++;
+  while (i < n) {
+    if (/\s/.test(str[i]!)) {
+      const wsStart = i;
+      while (i < n && /\s/.test(str[i]!)) i++;
+      outCh.push(" ");
+      outProv.push(prov[wsStart]!);
+      continue;
+    }
+    outCh.push(str[i]!);
+    outProv.push(prov[i]!);
+    i++;
+  }
+  while (outCh.length > 0 && outCh[outCh.length - 1] === " ") {
+    outCh.pop();
+    outProv.pop();
+  }
+  return { plain: outCh.join(""), prov: outProv };
+}
+
+function plainTextExcludingStrikeWithProv(el: HTMLElement): {
+  plain: string;
+  prov: Array<{ node: Text; offset: number }>;
+} {
+  let raw = "";
+  const rawProv: Array<{ node: Text; offset: number }> = [];
+  function walk(node: Node) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const tn = node as Text;
+      const s = tn.textContent ?? "";
+      for (let k = 0; k < s.length; k++) {
+        raw += s[k];
+        rawProv.push({ node: tn, offset: k });
+      }
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const elem = node as Element;
+    if (STRIKE_TAGS.has(elem.tagName.toLowerCase())) return;
+    for (const c of elem.childNodes) walk(c);
+  }
+  for (const c of el.childNodes) walk(c);
+  const nb = raw.replace(/\u00a0/g, " ");
+  return collapseWhitespaceTrimWithProv(nb, rawProv);
+}
+
+function trimPlainAndProv(
+  plain: string,
+  prov: Array<{ node: Text | null; offset: number }>
+): { plain: string; prov: Array<{ node: Text | null; offset: number }> } {
+  let s = 0;
+  let e = plain.length;
+  while (s < e && /\s/.test(plain[s]!)) s++;
+  while (e > s && /\s/.test(plain[e - 1]!)) e--;
+  return { plain: plain.slice(s, e), prov: prov.slice(s, e) };
+}
+
+/**
+ * Character-level map from section body HTML to text nodes (null = logical `\n\n` between blocks).
+ * Built from the same DOM root that will be mutated for wrapping.
+ */
+function sectionBodyPlainWithProvenanceFromRoot(root: HTMLElement): {
+  plain: string;
+  prov: Array<{ node: Text | null; offset: number }>;
+} {
+  const children = getContractEditorTopLevelElementsFromWrap(root);
+  if (children.length === 0) {
+    const r = plainTextExcludingStrikeWithProv(root);
+    return trimPlainAndProv(
+      r.plain.replace(/\u00a0/g, " "),
+      r.prov.map((p) => ({ node: p.node, offset: p.offset }))
+    );
+  }
+  let fullPlain = "";
+  let fullProv: Array<{ node: Text | null; offset: number }> = [];
+  let hasBlock = false;
+  for (const el of children) {
+    const t = plainTextExcludingStrike(el);
+    if (!t) continue;
+    const r = plainTextExcludingStrikeWithProv(el as HTMLElement);
+    if (hasBlock) {
+      fullPlain += "\n\n";
+      fullProv.push({ node: null, offset: 0 }, { node: null, offset: 0 });
+    }
+    fullPlain += r.plain;
+    for (const p of r.prov) {
+      fullProv.push({ node: p.node, offset: p.offset });
+    }
+    hasBlock = true;
+  }
+  return trimPlainAndProv(
+    fullPlain.replace(/\u00a0/g, " "),
+    fullProv
+  );
+}
+
+function wrapTextSegment(textNode: Text, start: number, end: number): void {
+  if (end <= start) return;
+  const doc = textNode.ownerDocument;
+  const parent = textNode.parentNode;
+  if (!doc || !parent) return;
+  const full = textNode.textContent ?? "";
+  if (start < 0 || end > full.length) return;
+  const before = full.slice(0, start);
+  const mid = full.slice(start, end);
+  const after = full.slice(end);
+  const frag = doc.createDocumentFragment();
+  if (before) frag.appendChild(doc.createTextNode(before));
+  const strong = doc.createElement("strong");
+  strong.appendChild(doc.createTextNode(mid));
+  frag.appendChild(strong);
+  if (after) frag.appendChild(doc.createTextNode(after));
+  parent.replaceChild(frag, textNode);
+}
+
+function addedRangesToWrapOps(
+  ranges: [number, number][],
+  prov: Array<{ node: Text | null; offset: number }>
+): { node: Text; start: number; end: number }[] {
+  const ops: { node: Text; start: number; end: number }[] = [];
+  for (const [a0, b0] of ranges) {
+    let i = a0;
+    while (i < b0) {
+      while (i < b0 && prov[i]?.node == null) i++;
+      if (i >= b0) break;
+      const n = prov[i]!.node!;
+      const startOff = prov[i]!.offset;
+      let lastOff = startOff;
+      i++;
+      while (
+        i < b0 &&
+        prov[i]?.node === n &&
+        prov[i]!.offset === lastOff + 1
+      ) {
+        lastOff = prov[i]!.offset;
+        i++;
+      }
+      ops.push({ node: n, start: startOff, end: lastOff + 1 });
+    }
+  }
+  return ops;
+}
+
+function sortWrapOpsForSafeApplication(
+  ops: { node: Text; start: number; end: number }[]
+): void {
+  ops.sort((a, b) => {
+    if (a.node === b.node) return b.start - a.start;
+    const pos = a.node.compareDocumentPosition(b.node);
+    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return 1;
+    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return -1;
+    return 0;
+  });
+}
+
+/**
+ * For contract-compare proposal saves: wrap diff-added runs in `<strong>` using sequential
+ * alignment between `parts` and visible plain text (strike skipped). Falls back to the
+ * original HTML if alignment fails.
+ */
+export function wrapDiffAdditionsInProposalBodyHtml(
+  bodyHtml: string,
+  parts: Change[]
+): string {
+  if (typeof document === "undefined") return bodyHtml;
+  const trimmed = bodyHtml.trim();
+  if (!trimmed) return bodyHtml;
+  if (!parts.some((p) => p.added)) return bodyHtml;
+
+  const reconstructed = newSidePlainFromParts(parts);
+  const root = document.createElement("div");
+  root.innerHTML = trimmed;
+
+  const domPlainCheck = sectionBodyPlainFromHtmlSliceRoot(root);
+  if (domPlainCheck !== reconstructed) return bodyHtml;
+
+  const { plain, prov } = sectionBodyPlainWithProvenanceFromRoot(root);
+  if (plain !== reconstructed) return bodyHtml;
+  if (plain.length !== prov.length) return bodyHtml;
+
+  let pos = 0;
+  for (const p of parts) {
+    if (p.removed) continue;
+    const L = p.value.length;
+    if (plain.slice(pos, pos + L) !== p.value) return bodyHtml;
+    pos += L;
+  }
+  if (pos !== plain.length) return bodyHtml;
+
+  const addedRangesRaw: [number, number][] = [];
+  pos = 0;
+  for (const p of parts) {
+    if (p.removed) continue;
+    const L = p.value.length;
+    if (p.added) addedRangesRaw.push([pos, pos + L]);
+    pos += L;
+  }
+
+  const addedRanges: [number, number][] = [];
+  for (const [a0, b0] of addedRangesRaw) {
+    let s = a0;
+    let e = b0;
+    while (s < e && /\s/.test(plain[s]!)) s++;
+    while (e > s && /\s/.test(plain[e - 1]!)) e--;
+    if (e > s) addedRanges.push([s, e]);
+  }
+
+  const ops = addedRangesToWrapOps(addedRanges, prov);
+  sortWrapOpsForSafeApplication(ops);
+  for (const op of ops) wrapTextSegment(op.node, op.start, op.end);
+
+  return root.innerHTML;
 }
