@@ -15,6 +15,11 @@ import {
   type SectionDiffRow,
   wrapDiffAdditionsInProposalBodyHtml,
 } from "@/lib/contract-compare";
+import {
+  matchChangedRowsToSavedProposals,
+  titlesAlignForProposal,
+  type SavedProposalForReconcile,
+} from "@/lib/proposal-candidate-reconcile";
 import { formatDate } from "@/lib/format";
 import { isLikelyNegotiationUuid } from "@/lib/negotiation-id";
 import {
@@ -289,7 +294,10 @@ function buildDefaultProposalReviewFields(
 }
 
 type ProposalReviewItem = {
-  /** Stable merge key when row indices shift (same heading in the diff). */
+  /**
+   * Last-seen section heading for this diff row index. Used to drop stale form
+   * state when the same index maps to a different section after a re-diff.
+   */
   sectionKey: string;
   include: boolean;
   title: string;
@@ -358,9 +366,74 @@ function ContractCompareView({
     [rows]
   );
 
-  const changedHeadingsKey = useMemo(
-    () => changedRows.map((r) => r.headingLabel).join("\u001f"),
-    [changedRows]
+  const [savedProposalsForReconcile, setSavedProposalsForReconcile] = useState<
+    SavedProposalForReconcile[]
+  >([]);
+
+  useEffect(() => {
+    if (
+      !showProposalReview ||
+      !isSupabaseConfigured() ||
+      !isLikelyNegotiationUuid(negotiationId)
+    ) {
+      setSavedProposalsForReconcile([]);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const supabase = createSupabaseClient();
+      const { data, error } = await supabase
+        .from("proposals")
+        .select("id, title, body_html")
+        .eq("negotiation_id", negotiationId.trim())
+        .order("created_at", { ascending: false });
+      if (cancelled) return;
+      if (error) {
+        setSavedProposalsForReconcile([]);
+        return;
+      }
+      setSavedProposalsForReconcile((data ?? []) as SavedProposalForReconcile[]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [negotiationId, showProposalReview]);
+
+  const getCanonicalRowBody = useCallback((row: SectionDiffRow) => {
+    const raw = row.newBodyHtml?.trim() ?? "";
+    if (!raw) return "";
+    if (typeof document === "undefined") return raw;
+    return wrapDiffAdditionsInProposalBodyHtml(raw, row.parts);
+  }, []);
+
+  const diffRowToSavedProposal = useMemo(
+    () =>
+      matchChangedRowsToSavedProposals(
+        changedRows,
+        savedProposalsForReconcile,
+        getCanonicalRowBody
+      ),
+    [changedRows, savedProposalsForReconcile, getCanonicalRowBody]
+  );
+
+  const unmatchedProposalRows = useMemo(
+    () => changedRows.filter((r) => !diffRowToSavedProposal.has(r.index)),
+    [changedRows, diffRowToSavedProposal]
+  );
+
+  const matchedProposalRows = useMemo(
+    () => changedRows.filter((r) => diffRowToSavedProposal.has(r.index)),
+    [changedRows, diffRowToSavedProposal]
+  );
+
+  const [savedMatchesLaneOpen, setSavedMatchesLaneOpen] = useState(false);
+
+  const reviewHeadingsKey = useMemo(
+    () =>
+      unmatchedProposalRows.map((r) => `${r.index}\u001f${r.headingLabel}`).join(
+        "\u0002"
+      ),
+    [unmatchedProposalRows]
   );
 
   const [reviewItems, setReviewItems] = useState<
@@ -370,11 +443,13 @@ function ContractCompareView({
   useEffect(() => {
     setReviewItems((prev) => {
       const next: Record<number, ProposalReviewItem> = {};
-      for (const r of changedRows) {
+      for (const r of unmatchedProposalRows) {
         const d = buildDefaultProposalReviewFields(r, negotiationId);
-        const prevMatch = Object.values(prev).find(
-          (p) => p.sectionKey === r.headingLabel
-        );
+        const prevForIndex = prev[r.index];
+        const prevMatch =
+          prevForIndex && prevForIndex.sectionKey === r.headingLabel
+            ? prevForIndex
+            : undefined;
         next[r.index] = prevMatch
           ? { ...prevMatch, sectionKey: r.headingLabel }
           : {
@@ -387,17 +462,18 @@ function ContractCompareView({
       }
       return next;
     });
-    // Intentionally omit `changedRows`: same `changedHeadingsKey` should not re-merge (avoids setState every keystroke).
+    // Intentionally omit `unmatchedProposalRows`: same `reviewHeadingsKey` should not re-merge (avoids setState every keystroke).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [changedHeadingsKey, negotiationId]);
+  }, [reviewHeadingsKey, negotiationId]);
   const [saveProposalsBusy, setSaveProposalsBusy] = useState(false);
   const [saveProposalsError, setSaveProposalsError] = useState<string | null>(
     null
   );
 
   const selectedCount = useMemo(
-    () => changedRows.filter((r) => reviewItems[r.index]?.include).length,
-    [changedRows, reviewItems]
+    () =>
+      unmatchedProposalRows.filter((r) => reviewItems[r.index]?.include).length,
+    [unmatchedProposalRows, reviewItems]
   );
 
   async function handleSaveSelectedProposals() {
@@ -420,9 +496,14 @@ function ContractCompareView({
     }
 
     const payload: ProposalInsert[] = [];
-    for (const r of changedRows) {
+    for (const r of unmatchedProposalRows) {
       const it = reviewItems[r.index];
       if (!it?.include) continue;
+      const defaults = buildDefaultProposalReviewFields(r, negotiationId);
+      const resolvedTitle = it.title.trim() || defaults.title;
+      const titleForSave = titlesAlignForProposal(r.headingLabel, resolvedTitle)
+        ? resolvedTitle
+        : defaults.title;
       const rawBody = r.newBodyHtml?.trim();
       const bodyHtml = rawBody
         ? wrapDiffAdditionsInProposalBodyHtml(rawBody, r.parts)
@@ -430,7 +511,7 @@ function ContractCompareView({
       payload.push({
         negotiation_id: negotiationId.trim(),
         prior_proposal_id: null,
-        title: it.title.trim() || "Contract change proposal",
+        title: titleForSave.trim() || "Contract change proposal",
         category: it.category.trim() || "general",
         status: "draft",
         summary: it.summary.trim() || null,
@@ -553,9 +634,10 @@ function ContractCompareView({
               Proposal review
             </h3>
             <p className="mt-1 max-w-3xl text-sm text-slate-600">
-              Select changes to capture as draft proposals. Defaults come from
-              the contract redline; adjust title, category, and summary before
-              saving.
+              New or edited contract language that does not yet match a saved
+              proposal for this negotiation appears below. Defaults come from the
+              redline; adjust title, category, and summary before saving. Edit or
+              remove existing proposals on the negotiation’s proposals list.
             </p>
           </div>
           {saveProposalsError ? (
@@ -563,8 +645,68 @@ function ContractCompareView({
               {saveProposalsError}
             </p>
           ) : null}
+          {matchedProposalRows.length > 0 ? (
+            <div className="mb-6 rounded-lg border border-slate-200 bg-slate-50/80">
+              <button
+                type="button"
+                onClick={() => setSavedMatchesLaneOpen((o) => !o)}
+                className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-medium text-slate-800 transition-colors hover:bg-slate-100/80"
+                aria-expanded={savedMatchesLaneOpen}
+              >
+                <span>
+                  Already saved
+                  <span className="ml-2 font-normal text-slate-600">
+                    ({matchedProposalRows.length}{" "}
+                    {matchedProposalRows.length === 1 ? "section" : "sections"}{" "}
+                    match proposals on file)
+                  </span>
+                </span>
+                <span className="shrink-0 text-slate-500" aria-hidden>
+                  {savedMatchesLaneOpen ? "▾" : "▸"}
+                </span>
+              </button>
+              {savedMatchesLaneOpen ? (
+                <ul className="space-y-2 border-t border-slate-200 px-4 py-3">
+                  {matchedProposalRows.map((row) => {
+                    return (
+                      <li
+                        key={`saved-match-${row.index}`}
+                        className="flex flex-wrap items-baseline justify-between gap-2 text-sm"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span
+                            className="mr-2 inline-block rounded border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-700"
+                            title="Matches a saved proposal for this negotiation"
+                          >
+                            Saved
+                          </span>
+                          <span className="font-medium text-slate-900">
+                            {row.headingLabel}
+                          </span>
+                        </span>
+                        <Link
+                          href={`/negotiations/${encodeURIComponent(negotiationId.trim())}#proposals`}
+                          className="shrink-0 text-sm font-medium text-slate-700 underline decoration-slate-300 underline-offset-2 hover:text-slate-900"
+                        >
+                          Open proposals tab
+                        </Link>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
+          {unmatchedProposalRows.length === 0 &&
+          matchedProposalRows.length > 0 ? (
+            <p className="mb-6 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600">
+              Every detected change matches a proposal already saved for this
+              negotiation. Use “Already saved” above for context, or open the
+              proposals tab to edit or remove.
+            </p>
+          ) : null}
           <ul className="space-y-6">
-            {changedRows.map((row) => {
+            {unmatchedProposalRows.map((row) => {
               const it = reviewItems[row.index];
               if (!it) return null;
               const changeType = proposalCandidateChangeType(row);
@@ -733,7 +875,9 @@ function ContractCompareView({
               <p className="mt-0.5 text-xs text-slate-600">
                 {selectedCount > 0
                   ? `${selectedCount} selected — saved as drafts on the proposals list.`
-                  : "Select at least one change above."}
+                  : unmatchedProposalRows.length === 0
+                    ? "No new proposal candidates in the checklist."
+                    : "Select at least one change above."}
               </p>
             </div>
             <button

@@ -24,6 +24,7 @@ import {
   sessionsMockForUi,
 } from "@/data/mock";
 import { formatDate, formatOptionalDate, formatStatus } from "@/lib/format";
+import { sortProposalsByBargainingOrderSnake } from "@/lib/proposal-article-sort";
 import { labelsFromNegotiationsRelation } from "@/lib/supabase-embeds";
 import {
   createSupabaseClient,
@@ -70,6 +71,7 @@ type ProposalItemVM = {
   status: ProposalStatus;
   body_html: string | null;
   summary: string | null;
+  created_at: string;
 };
 
 type NoteItemVM = {
@@ -169,16 +171,19 @@ function buildMockDetail(negotiationId: string): {
         new Date(b.scheduledAt).getTime() - new Date(a.scheduledAt).getTime()
     );
 
-  const proposals = proposalsMockForUi
-    .filter((p) => p.negotiationId === negotiationId)
-    .map((p) => ({
-      id: p.id,
-      title: p.title,
-      category: p.category,
-      status: p.status,
-      body_html: p.bodyHtml ?? null,
-      summary: p.summary,
-    }));
+  const proposals = sortProposalsByBargainingOrderSnake(
+    proposalsMockForUi
+      .filter((p) => p.negotiationId === negotiationId)
+      .map((p) => ({
+        id: p.id,
+        title: p.title,
+        category: p.category,
+        status: p.status,
+        body_html: p.bodyHtml ?? null,
+        summary: p.summary,
+        created_at: p.createdAt,
+      }))
+  );
 
   const notes = notesMockForUi
     .filter((x) => x.negotiationId === negotiationId)
@@ -443,17 +448,28 @@ export default function NegotiationDetailPage() {
     const supabase = createSupabaseClient();
     const { data, error } = await supabase
       .from("proposals")
-      .select("id, title, category, status, body_html, summary")
-      .eq("negotiation_id", id)
-      .order("created_at", { ascending: false });
+      .select("id, title, category, status, body_html, summary, created_at")
+      .eq("negotiation_id", id);
     if (error) return { error: error.message, rows: null };
-    const rows = (data ?? []) as ProposalItemVM[];
+    const rows = sortProposalsByBargainingOrderSnake(
+      (data ?? []) as ProposalItemVM[]
+    );
     setProposals(rows);
     return { error: null, rows };
   }, [id]);
 
   useEffect(() => {
-    setActiveTab("summary");
+    const applyHashTab = () => {
+      const h =
+        typeof window !== "undefined"
+          ? window.location.hash.replace(/^#/, "").toLowerCase()
+          : "";
+      if (h === "proposals") setActiveTab("proposals");
+      else setActiveTab("summary");
+    };
+    applyHashTab();
+    window.addEventListener("hashchange", applyHashTab);
+    return () => window.removeEventListener("hashchange", applyHashTab);
   }, [id]);
 
   useEffect(() => {
@@ -524,9 +540,8 @@ export default function NegotiationDetailPage() {
             .order("scheduled_at", { ascending: false }),
           supabase
             .from("proposals")
-            .select("id, title, category, status, body_html, summary")
-            .eq("negotiation_id", id)
-            .order("created_at", { ascending: false }),
+            .select("id, title, category, status, body_html, summary, created_at")
+            .eq("negotiation_id", id),
           supabase
             .from("notes")
             .select("id, body, author, note_type, created_at")
@@ -567,7 +582,11 @@ export default function NegotiationDetailPage() {
           mapSessionQueryRows((sessRes.data ?? []) as SessionQueryRow[])
         );
 
-        setProposals((propRes.data ?? []) as ProposalItemVM[]);
+        setProposals(
+          sortProposalsByBargainingOrderSnake(
+            (propRes.data ?? []) as ProposalItemVM[]
+          )
+        );
 
         type NoteRow = {
           id: string;

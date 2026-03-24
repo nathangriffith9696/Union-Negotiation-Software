@@ -1,38 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
+  compareProposalsBargainingOrder,
   proposalArticleSortKey,
-  type ProposalsPrintRow,
-} from "./ProposalsPrintDocument";
-
-function sortTitles(titles: string[]): string[] {
-  const rows: ProposalsPrintRow[] = titles.map((title, i) => ({
-    id: `id-${i}`,
-    title,
-    category: "general",
-    status: "draft",
-    summary: null,
-    bodyHtml: null,
-    proposingParty: "union",
-    negotiationTitle: "N",
-    bargainingUnitName: "BU",
-    localName: "L",
-    districtName: "D",
-  }));
-  rows.sort((a, b) => {
-    const ka = proposalArticleSortKey(a.title);
-    const kb = proposalArticleSortKey(b.title);
-    const oa =
-      ka.bucket === "preamble" ? 0 : ka.bucket === "article" ? 1 : 2;
-    const ob =
-      kb.bucket === "preamble" ? 0 : kb.bucket === "article" ? 1 : 2;
-    if (oa !== ob) return oa - ob;
-    if (ka.bucket === "article" && kb.bucket === "article") {
-      return (ka.articleNumber ?? 0) - (kb.articleNumber ?? 0);
-    }
-    return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
-  });
-  return rows.map((r) => r.title);
-}
+} from "./proposal-article-sort";
 
 describe("proposalArticleSortKey", () => {
   it("detects numbered articles case-insensitively", () => {
@@ -72,7 +42,18 @@ describe("proposalArticleSortKey", () => {
   });
 });
 
-describe("proposal packet sort order", () => {
+function sortTitles(titles: string[]): string[] {
+  const base = "2000-01-01T00:00:00.000Z";
+  const rows = titles.map((title, i) => ({
+    title,
+    createdAt: base,
+    id: `id-${i}`,
+  }));
+  rows.sort(compareProposalsBargainingOrder);
+  return rows.map((r) => r.title);
+}
+
+describe("compareProposalsBargainingOrder", () => {
   it("orders preamble, then articles numerically, then other", () => {
     const out = sortTitles([
       "Article 10 — Z",
@@ -88,5 +69,15 @@ describe("proposal packet sort order", () => {
     expect(out[3]).toBe("Article 2 — B duplicate number tiebreak by title");
     expect(out[4]).toBe("Article 10 — Z");
     expect(out[5]).toBe("Side letter — other");
+  });
+
+  it("uses createdAt when titles are identical", () => {
+    const rows = [
+      { title: "Article 5 — X", createdAt: "2025-03-02T10:00:00.000Z", id: "b" },
+      { title: "Article 5 — X", createdAt: "2025-03-01T10:00:00.000Z", id: "a" },
+    ];
+    const sorted = [...rows].sort(compareProposalsBargainingOrder);
+    expect(sorted[0]!.id).toBe("a");
+    expect(sorted[1]!.id).toBe("b");
   });
 });

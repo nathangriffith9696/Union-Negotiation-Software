@@ -260,6 +260,23 @@ describe("buildSectionDiffRows", () => {
       row.parts.some((p) => p.added && /weekly/i.test(p.value))
     ).toBe(true);
   });
+
+  it("keeps newBodyHtml aligned with section headings when an empty heading precedes the first real article (regression: slice zip vs preamble)", () => {
+    const prev = contractHtml(undefined, [
+      { heading: "Article 36", body: "BASE" },
+    ]);
+    const next =
+      "<h2></h2><p>ORPHAN_UNIQUE</p><h2>Article 36</h2><p>BASE A36_MARKER</p>";
+    const rows = buildSectionDiffRows(prev, next);
+    const pre = rows.find(
+      (r) => r.headingLabel === "Preamble (before first heading)"
+    )!;
+    const art = rows.find((r) => r.headingLabel === "Article 36")!;
+    expect(pre.newBodyHtml).toContain("ORPHAN_UNIQUE");
+    expect(pre.newBodyHtml).not.toContain("A36_MARKER");
+    expect(art.newBodyHtml).toContain("A36_MARKER");
+    expect(art.newBodyHtml).not.toContain("ORPHAN_UNIQUE");
+  });
 });
 
 describe("sumChangeTotals", () => {

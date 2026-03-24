@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { formatDate, formatStatus } from "@/lib/format";
+import { compareProposalsBargainingOrder } from "@/lib/proposal-article-sort";
 import type { ProposalStatus, ProposingParty } from "@/types/database";
 
 export type ProposalsPrintRow = {
@@ -17,56 +18,9 @@ export type ProposalsPrintRow = {
   bargainingUnitName: string;
   localName: string;
   districtName: string;
+  /** Used for stable ordering within the same title/article bucket (e.g. from `created_at`). */
+  createdAt?: string | null;
 };
-
-/** Preamble / intro-style headings sort before numbered articles. */
-const PREAMBLE_PATTERN =
-  /\b(preamble|introduction|intro\.?|prefatory|opening\s+provisions?|cover\s+letter|letter\s+of\s+understanding|mou|memorandum)\b/i;
-
-/** Numeric article: "Article 1", "ARTICLE 12 — …", etc. */
-const ARTICLE_NUM_PATTERN = /\barticle\s+(\d+)\b/i;
-
-type ArticleSortBucket = "preamble" | "article" | "other";
-
-export type ProposalArticleSortKey = {
-  bucket: ArticleSortBucket;
-  /** Set only when bucket === "article". */
-  articleNumber: number | null;
-};
-
-/** Exposed for tests or tooling. */
-export function proposalArticleSortKey(title: string): ProposalArticleSortKey {
-  const t = title.trim();
-  const articleMatch = ARTICLE_NUM_PATTERN.exec(t);
-  if (articleMatch) {
-    const n = Number.parseInt(articleMatch[1]!, 10);
-    if (Number.isFinite(n) && n >= 0) {
-      return { bucket: "article", articleNumber: n };
-    }
-  }
-  if (PREAMBLE_PATTERN.test(t)) {
-    return { bucket: "preamble", articleNumber: null };
-  }
-  return { bucket: "other", articleNumber: null };
-}
-
-function bucketOrder(b: ArticleSortBucket): number {
-  if (b === "preamble") return 0;
-  if (b === "article") return 1;
-  return 2;
-}
-
-function compareProposalsForPacket(a: ProposalsPrintRow, b: ProposalsPrintRow): number {
-  const ka = proposalArticleSortKey(a.title);
-  const kb = proposalArticleSortKey(b.title);
-  const oa = bucketOrder(ka.bucket);
-  const ob = bucketOrder(kb.bucket);
-  if (oa !== ob) return oa - ob;
-  if (ka.bucket === "article" && kb.bucket === "article") {
-    return (ka.articleNumber ?? 0) - (kb.articleNumber ?? 0);
-  }
-  return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
-}
 
 function groupByNegotiationSorted(
   rows: ProposalsPrintRow[]
@@ -84,7 +38,20 @@ function groupByNegotiationSorted(
     )
     .map(([negotiationTitle, proposals]) => ({
       negotiationTitle,
-      proposals: [...proposals].sort(compareProposalsForPacket),
+      proposals: [...proposals].sort((a, b) =>
+        compareProposalsBargainingOrder(
+          {
+            title: a.title,
+            createdAt: a.createdAt?.trim() || "",
+            id: a.id,
+          },
+          {
+            title: b.title,
+            createdAt: b.createdAt?.trim() || "",
+            id: b.id,
+          }
+        )
+      ),
     }));
 }
 

@@ -20,6 +20,7 @@ import {
   proposalsMockForUi,
 } from "@/data/mock";
 import { formatDate, formatStatus } from "@/lib/format";
+import { sortProposalsBargainingOrder } from "@/lib/proposal-article-sort";
 import { isLikelyNegotiationUuid } from "@/lib/negotiation-id";
 import { labelsFromNegotiationsRelation } from "@/lib/supabase-embeds";
 import {
@@ -42,6 +43,7 @@ type ProposalCardVM = {
   bargainingUnitName: string;
   localName: string;
   districtName: string;
+  createdAt: string;
 };
 
 type ProposalWithRelationsRow = {
@@ -54,6 +56,7 @@ type ProposalWithRelationsRow = {
   version_label: string | null;
   proposing_party: ProposingParty;
   submitted_at: string | null;
+  created_at: string;
   negotiations: {
     title: string;
     bargaining_units:
@@ -101,6 +104,7 @@ function buildMockRows(negotiationId: string | null): ProposalCardVM[] {
       bargainingUnitName: bu?.name ?? "Unknown unit",
       localName: local?.name ?? "Unknown local",
       districtName: district?.name ?? "Unknown district",
+      createdAt: p.createdAt,
     };
   });
 }
@@ -121,6 +125,7 @@ function mapSupabaseRow(row: ProposalWithRelationsRow): ProposalCardVM {
     bargainingUnitName: chain.bargainingUnitName,
     localName: chain.localName,
     districtName: chain.districtName,
+    createdAt: row.created_at,
   };
 }
 
@@ -184,6 +189,7 @@ function ProposalsPageContent() {
             version_label,
             proposing_party,
             submitted_at,
+            created_at,
             negotiations (
               title,
               bargaining_units (
@@ -195,8 +201,7 @@ function ProposalsPageContent() {
               )
             )
           `
-          )
-          .order("created_at", { ascending: false });
+          );
 
         if (scopeIsUuid) {
           query = query.eq("negotiation_id", negotiationScope!);
@@ -214,7 +219,10 @@ function ProposalsPageContent() {
         }
 
         const typed = (data ?? []) as ProposalWithRelationsRow[];
-        const list = typed.map(mapSupabaseRow);
+        const mapped = typed.map(mapSupabaseRow);
+        const list = scopeIsUuid
+          ? sortProposalsBargainingOrder(mapped)
+          : [...mapped].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
         setRows(list);
         setStatus(list.length === 0 ? "empty" : "ready");

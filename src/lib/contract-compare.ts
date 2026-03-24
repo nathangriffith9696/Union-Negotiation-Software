@@ -158,6 +158,82 @@ export function buildContractSections(html: string): ContractSection[] {
   return sections;
 }
 
+type ContractSectionWithBody = ContractSection & { bodyHtml: string };
+
+/**
+ * Same section boundaries as {@link buildContractSections}, but each section also carries the
+ * concatenated `outerHTML` of its non-heading top-level blocks (excludes h1–h3). Keeps diff row
+ * `headingLabel` / `plain` aligned with `newBodyHtml` for proposal saves.
+ */
+function buildContractSectionsWithBodyHtml(html: string): ContractSectionWithBody[] {
+  if (typeof document === "undefined") {
+    return [];
+  }
+  const wrap = document.createElement("div");
+  wrap.innerHTML = html.trim() ? html : "";
+  const sections: ContractSectionWithBody[] = [];
+  type Current = {
+    heading: string | null;
+    plain: string;
+    bodyParts: string[];
+  };
+  let current: Current | null = null;
+
+  function pushCurrent() {
+    if (!current) return;
+    const plain = current.plain.replace(/\u00a0/g, " ").trim();
+    if (!plain && current.heading === null) {
+      current = null;
+      return;
+    }
+    sections.push({
+      heading: current.heading,
+      plain,
+      bodyHtml: current.bodyParts.join(""),
+    });
+    current = null;
+  }
+
+  const children = getContractEditorTopLevelElementsFromWrap(wrap);
+  if (children.length === 0) {
+    const t = plainTextExcludingStrike(wrap);
+    if (t) {
+      return [
+        {
+          heading: null,
+          plain: t,
+          bodyHtml: wrap.innerHTML.trim(),
+        },
+      ];
+    }
+    return [];
+  }
+
+  for (const el of children) {
+    const tag = el.tagName.toLowerCase();
+    if (tag === "h1" || tag === "h2" || tag === "h3") {
+      pushCurrent();
+      const hText = plainTextExcludingStrike(el as HTMLElement);
+      current = {
+        heading: hText.length > 0 ? hText : null,
+        plain: "",
+        bodyParts: [],
+      };
+    } else {
+      if (!current) {
+        current = { heading: null, plain: "", bodyParts: [] };
+      }
+      current.bodyParts.push(el.outerHTML);
+      const t = plainTextExcludingStrike(el as HTMLElement);
+      if (t) {
+        current.plain = current.plain ? `${current.plain}\n\n${t}` : t;
+      }
+    }
+  }
+  pushCurrent();
+  return sections;
+}
+
 /**
  * Normalize headings for exact matching (case, punctuation, whitespace).
  */
@@ -209,6 +285,34 @@ function headingSimilarity(a: string, b: string): number {
 function displayHeading(raw: string | null | undefined): string {
   const t = raw?.trim();
   return t && t.length > 0 ? t : "Untitled section";
+}
+
+function extractPreambleHeadedWithBody(sections: ContractSectionWithBody[]): {
+  preamblePlain: string;
+  preambleHtml: string;
+  headed: Array<{ heading: string; plain: string; bodyHtml: string }>;
+} {
+  if (sections.length === 0) {
+    return { preamblePlain: "", preambleHtml: "", headed: [] };
+  }
+  let preamblePlain = "";
+  let preambleHtml = "";
+  let startIdx = 0;
+  if (sections[0]!.heading === null) {
+    preamblePlain = sections[0]!.plain.replace(/\u00a0/g, " ").trim();
+    preambleHtml = sections[0]!.bodyHtml;
+    startIdx = 1;
+  }
+  const headed: Array<{ heading: string; plain: string; bodyHtml: string }> = [];
+  for (let i = startIdx; i < sections.length; i++) {
+    const s = sections[i]!;
+    headed.push({
+      heading: displayHeading(s.heading),
+      plain: s.plain.replace(/\u00a0/g, " ").trim(),
+      bodyHtml: s.bodyHtml,
+    });
+  }
+  return { preamblePlain, preambleHtml, headed };
 }
 
 /**
@@ -268,7 +372,8 @@ function buildDiffRow(
 
 /**
  * Split contract HTML like {@link buildContractSections}, but keep raw `outerHTML` for each
- * section body (excludes the heading elements themselves).
+ * section body (excludes the heading elements themselves). Uses the same walk as
+ * {@link buildContractSectionsWithBodyHtml} so slice indices cannot drift from section indices.
  */
 export function extractContractSectionBodyHtmlSlices(html: string): {
   preambleHtml: string;
@@ -277,41 +382,11 @@ export function extractContractSectionBodyHtmlSlices(html: string): {
   if (typeof document === "undefined") {
     return { preambleHtml: "", headedBodyHtmls: [] };
   }
-  const wrap = document.createElement("div");
-  wrap.innerHTML = html.trim() ? html : "";
-  const children = getContractEditorTopLevelElementsFromWrap(wrap);
-
-  if (children.length === 0) {
-    const inner = wrap.innerHTML.trim();
-    return { preambleHtml: inner, headedBodyHtmls: [] };
-  }
-
-  const preambleParts: string[] = [];
-  const headedBodyHtmls: string[] = [];
-  let currentBodyParts: string[] = [];
-  let seenFirstHeading = false;
-
-  for (const el of children) {
-    const tag = el.tagName.toLowerCase();
-    if (tag === "h1" || tag === "h2" || tag === "h3") {
-      if (!seenFirstHeading) {
-        seenFirstHeading = true;
-      } else {
-        headedBodyHtmls.push(currentBodyParts.join(""));
-        currentBodyParts = [];
-      }
-    } else if (!seenFirstHeading) {
-      preambleParts.push(el.outerHTML);
-    } else {
-      currentBodyParts.push(el.outerHTML);
-    }
-  }
-
-  if (!seenFirstHeading) {
-    return { preambleHtml: preambleParts.join(""), headedBodyHtmls: [] };
-  }
-  headedBodyHtmls.push(currentBodyParts.join(""));
-  return { preambleHtml: preambleParts.join(""), headedBodyHtmls };
+  const ex = extractPreambleHeadedWithBody(buildContractSectionsWithBodyHtml(html));
+  return {
+    preambleHtml: ex.preambleHtml,
+    headedBodyHtmls: ex.headed.map((h) => h.bodyHtml),
+  };
 }
 
 type HeadingPair = { oldIdx: number; newIdx: number; sim: number };
@@ -402,11 +477,14 @@ export function buildSectionDiffRows(
   selectedHtml: string
 ): SectionDiffRow[] {
   const prev = buildContractSections(previousHtml);
-  const next = buildContractSections(selectedHtml);
-  const slices = extractContractSectionBodyHtmlSlices(selectedHtml);
+  const nextSec = buildContractSectionsWithBodyHtml(selectedHtml);
+  const nextEx = extractPreambleHeadedWithBody(nextSec);
 
   const prevPh = extractPreambleAndHeaded(prev);
-  const nextPh = extractPreambleAndHeaded(next);
+  const nextPh: { preamblePlain: string; headed: HeadedBlock[] } = {
+    preamblePlain: nextEx.preamblePlain,
+    headed: nextEx.headed.map(({ heading, plain }) => ({ heading, plain })),
+  };
 
   const emptyDoc =
     prevPh.headed.length === 0 &&
@@ -418,8 +496,8 @@ export function buildSectionDiffRows(
     const parts = diffWordsWithSpace("", "");
     const stats = analyzeParts(parts);
     const fallbackHtml =
-      slices.preambleHtml ||
-      slices.headedBodyHtmls.join("") ||
+      nextEx.preambleHtml ||
+      nextEx.headed.map((h) => h.bodyHtml).join("") ||
       selectedHtml.trim();
     return [
       {
@@ -450,13 +528,13 @@ export function buildSectionDiffRows(
       "Preamble (before first heading)",
       prevPh.preamblePlain,
       nextPh.preamblePlain,
-      slices.preambleHtml
+      nextEx.preambleHtml
     )
   );
 
   for (let ni = 0; ni < nextPh.headed.length; ni++) {
     const newBlock = nextPh.headed[ni]!;
-    const bodyHtml = slices.headedBodyHtmls[ni] ?? "";
+    const bodyHtml = nextEx.headed[ni]!.bodyHtml;
     const oi = newToOld.get(ni);
     if (oi !== undefined) {
       const oldBlock = prevPh.headed[oi]!;

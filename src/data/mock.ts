@@ -298,6 +298,7 @@ export const proposalsMockForUi = proposals.map((p, i) => {
     versionLabel: proposalsMockVersionLabels[i] ?? null,
     proposingParty: proposalsMockProposingParties[i] ?? "union",
     submittedAt: p.status === "draft" ? null : p.createdAt,
+    createdAt: p.createdAt,
   };
 });
 
