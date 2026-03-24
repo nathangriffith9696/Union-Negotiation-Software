@@ -1,8 +1,25 @@
 import { describe, expect, it } from "vitest";
 import {
   compareProposalsBargainingOrder,
+  extractArticleNumberFromTitle,
   proposalArticleSortKey,
+  sortProposalsByBargainingOrderSnake,
 } from "./proposal-article-sort";
+
+describe("extractArticleNumberFromTitle", () => {
+  it("parses case-insensitive Article N with hyphen or en-dash subtitles", () => {
+    expect(extractArticleNumberFromTitle("Article 2")).toBe(2);
+    expect(extractArticleNumberFromTitle("ARTICLE 2")).toBe(2);
+    expect(extractArticleNumberFromTitle("Article 2 - Wages")).toBe(2);
+    expect(extractArticleNumberFromTitle("Article 2 – Wages")).toBe(2);
+  });
+
+  it("returns null when no numbered article token", () => {
+    expect(extractArticleNumberFromTitle("Preamble")).toBeNull();
+    expect(extractArticleNumberFromTitle("Side letter A")).toBeNull();
+    expect(extractArticleNumberFromTitle("")).toBeNull();
+  });
+});
 
 describe("proposalArticleSortKey", () => {
   it("detects numbered articles case-insensitively", () => {
@@ -79,5 +96,22 @@ describe("compareProposalsBargainingOrder", () => {
     const sorted = [...rows].sort(compareProposalsBargainingOrder);
     expect(sorted[0]!.id).toBe("a");
     expect(sorted[1]!.id).toBe("b");
+  });
+
+  it("lists older duplicate Article 1 before newer (negotiation proposals tab uses this order)", () => {
+    const rows = [
+      {
+        id: "newer-a1",
+        title: "Article 1",
+        created_at: "2025-02-01T12:00:00.000Z",
+      },
+      {
+        id: "older-a1",
+        title: "Article 1",
+        created_at: "2025-01-01T12:00:00.000Z",
+      },
+    ];
+    const sorted = sortProposalsByBargainingOrderSnake(rows);
+    expect(sorted.map((r) => r.id)).toEqual(["older-a1", "newer-a1"]);
   });
 });

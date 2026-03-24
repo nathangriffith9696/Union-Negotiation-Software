@@ -16,12 +16,20 @@ import {
   wrapDiffAdditionsInProposalBodyHtml,
 } from "@/lib/contract-compare";
 import {
+  findNewestAligningDraftProposalId,
   matchChangedRowsToSavedProposals,
+  proposalSaveGroupKey,
   titlesAlignForProposal,
   type SavedProposalForReconcile,
 } from "@/lib/proposal-candidate-reconcile";
 import { formatDate } from "@/lib/format";
 import { isLikelyNegotiationUuid } from "@/lib/negotiation-id";
+import {
+  isProposalSaveTraceCaptureEnabled,
+  shouldCaptureProposalSaveTraceArticle1,
+  writeProposalSaveTrace,
+  type ProposalSaveTraceV1,
+} from "@/lib/proposal-save-trace";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
@@ -29,6 +37,7 @@ import {
 import type {
   NegotiationContractVersionInsert,
   ProposalInsert,
+  ProposalUpdate,
 } from "@/types/database";
 
 const MOCK_STORAGE_PREFIX = "union-contract-versions:v1:";
@@ -384,7 +393,7 @@ function ContractCompareView({
       const supabase = createSupabaseClient();
       const { data, error } = await supabase
         .from("proposals")
-        .select("id, title, body_html")
+        .select("id, title, body_html, status, created_at")
         .eq("negotiation_id", negotiationId.trim())
         .order("created_at", { ascending: false });
       if (cancelled) return;
@@ -495,50 +504,273 @@ function ContractCompareView({
       return;
     }
 
-    const payload: ProposalInsert[] = [];
-    for (const r of unmatchedProposalRows) {
-      const it = reviewItems[r.index];
-      if (!it?.include) continue;
-      const defaults = buildDefaultProposalReviewFields(r, negotiationId);
-      const resolvedTitle = it.title.trim() || defaults.title;
-      const titleForSave = titlesAlignForProposal(r.headingLabel, resolvedTitle)
-        ? resolvedTitle
-        : defaults.title;
-      const rawBody = r.newBodyHtml?.trim();
-      const bodyHtml = rawBody
-        ? wrapDiffAdditionsInProposalBodyHtml(rawBody, r.parts)
-        : "";
-      payload.push({
-        negotiation_id: negotiationId.trim(),
-        prior_proposal_id: null,
-        title: titleForSave.trim() || "Contract change proposal",
-        category: it.category.trim() || "general",
-        status: "draft",
-        summary: it.summary.trim() || null,
-        body_html: bodyHtml || null,
-        submitted_at: null,
-        submitted_by: null,
-        version_label: null,
-        proposing_party: "union",
-        version_number: 1,
-      });
-    }
-
-    if (payload.length === 0) {
-      setSaveProposalsError("Select at least one change with “Include as proposal”.");
-      return;
-    }
-
     setSaveProposalsBusy(true);
+    const traceEnabled = isProposalSaveTraceCaptureEnabled();
+    let article1Trace: ProposalSaveTraceV1 | null = null;
+    let tracedInsertIndex: number | null = null;
+
     try {
       const supabase = createSupabaseClient();
-      const { error } = await supabase
-        .from("proposals")
-        .insert(payload as never);
 
-      if (error) {
-        setSaveProposalsError(friendlyProposalSaveError(error));
+      const { data: freshRows, error: freshErr } = await supabase
+        .from("proposals")
+        .select("id, title, body_html, status, created_at")
+        .eq("negotiation_id", negotiationId.trim())
+        .order("created_at", { ascending: false });
+
+      if (freshErr) {
+        setSaveProposalsError(friendlyProposalSaveError(freshErr));
         return;
+      }
+      const savedFresh = (freshRows ?? []) as SavedProposalForReconcile[];
+
+      const insertPayload: ProposalInsert[] = [];
+      const updatesById = new Map<string, ProposalUpdate>();
+
+      const selectedRows = unmatchedProposalRows
+        .filter((r) => reviewItems[r.index]?.include)
+        .sort((a, b) => a.index - b.index);
+
+      const byGroup = new Map<string, typeof selectedRows>();
+      for (const r of selectedRows) {
+        const k = proposalSaveGroupKey(r.headingLabel);
+        const g = byGroup.get(k);
+        if (g) g.push(r);
+        else byGroup.set(k, [r]);
+      }
+
+      for (const rows of byGroup.values()) {
+        rows.sort((a, b) => a.index - b.index);
+        const primary = rows[0]!;
+
+        const mergedRawNewBodyHtml = rows
+          .map((r) => r.newBodyHtml?.trim() ?? "")
+          .filter(Boolean)
+          .join("");
+        const mergedBodyHtml =
+          rows
+            .map((r) => {
+              const raw = r.newBodyHtml?.trim();
+              if (!raw) return "";
+              return wrapDiffAdditionsInProposalBodyHtml(raw, r.parts);
+            })
+            .join("") || "";
+
+        const it0 = reviewItems[primary.index]!;
+        const defaults0 = buildDefaultProposalReviewFields(primary, negotiationId);
+        const resolvedTitle = it0.title.trim() || defaults0.title;
+        const titleForSave = titlesAlignForProposal(
+          primary.headingLabel,
+          resolvedTitle
+        )
+          ? resolvedTitle
+          : defaults0.title;
+        const title = titleForSave.trim() || "Contract change proposal";
+        const category = it0.category.trim() || "general";
+        const summaryParts = rows
+          .map((r) => reviewItems[r.index]?.summary?.trim())
+          .filter((s): s is string => Boolean(s));
+        const summary = summaryParts.length ? summaryParts.join("\n\n") : null;
+        const body_html = mergedBodyHtml || null;
+
+        const draftId = findNewestAligningDraftProposalId(
+          primary.headingLabel,
+          savedFresh
+        );
+        if (draftId) {
+          const patch = {
+            title,
+            category,
+            summary,
+            body_html,
+          };
+          if (
+            traceEnabled &&
+            rows.some((r) =>
+              shouldCaptureProposalSaveTraceArticle1(r.headingLabel)
+            )
+          ) {
+            const hadPriorArticle1Trace = article1Trace !== null;
+            article1Trace = {
+              v: 1,
+              capturedAtIso: new Date().toISOString(),
+              negotiationId: negotiationId.trim(),
+              headingLabel: primary.headingLabel,
+              rawNewBodyHtml: mergedRawNewBodyHtml,
+              wrappedBodyHtml: body_html,
+              matchedDraftProposalId: draftId,
+              action: "UPDATE",
+              supabasePayload: { ...patch },
+              resolvedProposalId: draftId,
+              postSaveFetch: null,
+              proposalsListPhase: "pending",
+              proposalsListBodyHtml: null,
+              proposalsListRowFound: false,
+            };
+            if (hadPriorArticle1Trace) {
+              article1Trace.overwrittenPriorTrace = true;
+            }
+          }
+          updatesById.set(draftId, patch);
+        } else {
+          const insertObj: ProposalInsert = {
+            negotiation_id: negotiationId.trim(),
+            prior_proposal_id: null,
+            title,
+            category,
+            status: "draft",
+            summary,
+            body_html,
+            submitted_at: null,
+            submitted_by: null,
+            version_label: null,
+            proposing_party: "union",
+            version_number: 1,
+          };
+          if (
+            traceEnabled &&
+            rows.some((r) =>
+              shouldCaptureProposalSaveTraceArticle1(r.headingLabel)
+            )
+          ) {
+            const hadPriorArticle1Trace = article1Trace !== null;
+            tracedInsertIndex = insertPayload.length;
+            article1Trace = {
+              v: 1,
+              capturedAtIso: new Date().toISOString(),
+              negotiationId: negotiationId.trim(),
+              headingLabel: primary.headingLabel,
+              rawNewBodyHtml: mergedRawNewBodyHtml,
+              wrappedBodyHtml: body_html,
+              matchedDraftProposalId: null,
+              action: "INSERT",
+              supabasePayload: { ...insertObj },
+              resolvedProposalId: null,
+              postSaveFetch: null,
+              proposalsListPhase: "pending",
+              proposalsListBodyHtml: null,
+              proposalsListRowFound: false,
+            };
+            if (hadPriorArticle1Trace) {
+              article1Trace.overwrittenPriorTrace = true;
+            }
+          }
+          insertPayload.push(insertObj);
+        }
+      }
+
+      if (insertPayload.length === 0 && updatesById.size === 0) {
+        setSaveProposalsError("Select at least one change with “Include as proposal”.");
+        return;
+      }
+
+      for (const [id, patch] of updatesById) {
+        const { error: upErr } = await supabase
+          .from("proposals")
+          .update(patch as never)
+          .eq("id", id);
+        if (upErr) {
+          setSaveProposalsError(friendlyProposalSaveError(upErr));
+          return;
+        }
+
+        // PostgREST returns no error when RLS causes UPDATE to match 0 rows. Refetch and
+        // compare body_html so silent failures (SELECT allowed, UPDATE blocked) are visible.
+        if (Object.prototype.hasOwnProperty.call(patch, "body_html")) {
+          const { data: persisted, error: persistErr } = await supabase
+            .from("proposals")
+            .select("body_html")
+            .eq("id", id)
+            .maybeSingle();
+          if (persistErr) {
+            setSaveProposalsError(friendlyProposalSaveError(persistErr));
+            return;
+          }
+          const row = persisted as { body_html: string | null } | null;
+          const expected = patch.body_html ?? null;
+          const actual = row?.body_html ?? null;
+          if (expected !== actual) {
+            setSaveProposalsError(
+              "Proposal language did not save: the database row’s body_html did not change after UPDATE. This usually means Row Level Security blocked the update (0 rows updated) while SELECT still returns the row. In Supabase, open public.proposals policies and ensure UPDATE’s USING/WITH CHECK align with what SELECT allows for your role."
+            );
+            return;
+          }
+        }
+      }
+
+      if (
+        article1Trace?.action === "UPDATE" &&
+        article1Trace.resolvedProposalId
+      ) {
+        const { data: reread, error: rereadErr } = await supabase
+          .from("proposals")
+          .select(
+            "id, title, body_html, status, category, summary, created_at, negotiation_id"
+          )
+          .eq("id", article1Trace.resolvedProposalId)
+          .single();
+        article1Trace.postSaveFetch = {
+          ok: !!reread && !rereadErr,
+          error: rereadErr?.message ?? null,
+          row: reread
+            ? ({ ...(reread as Record<string, unknown>) })
+            : null,
+        };
+      }
+
+      if (insertPayload.length > 0) {
+        if (article1Trace?.action === "INSERT") {
+          const { data: insData, error: insErr } = await supabase
+            .from("proposals")
+            .insert(insertPayload as never)
+            .select(
+              "id, title, body_html, status, category, summary, created_at, negotiation_id"
+            );
+          if (insErr) {
+            setSaveProposalsError(friendlyProposalSaveError(insErr));
+            return;
+          }
+          const inserted = (insData ?? []) as {
+            id: string;
+            title: string;
+            body_html: string | null;
+            status: string;
+            category: string;
+            summary: string | null;
+            created_at: string;
+            negotiation_id: string;
+          }[];
+          const idx = tracedInsertIndex ?? 0;
+          const row = inserted[idx];
+          article1Trace.resolvedProposalId = row?.id ?? null;
+          article1Trace.postSaveFetch = {
+            ok: !!row,
+            error: row
+              ? null
+              : `insert returned ${inserted.length} rows; expected row at index ${idx} (RLS on RETURNING?)`,
+            row: row ? ({ ...(row as Record<string, unknown>) }) : null,
+            insertSelectCount: inserted.length,
+          };
+        } else {
+          const { error } = await supabase
+            .from("proposals")
+            .insert(insertPayload as never);
+
+          if (error) {
+            setSaveProposalsError(friendlyProposalSaveError(error));
+            return;
+          }
+        }
+      }
+
+      if (article1Trace && traceEnabled) {
+        writeProposalSaveTrace(article1Trace);
+        console.groupCollapsed(
+          "[Union] Article 1 proposal save trace",
+          article1Trace.headingLabel
+        );
+        console.log(JSON.stringify(article1Trace, null, 2));
+        console.groupEnd();
       }
 
       router.push(

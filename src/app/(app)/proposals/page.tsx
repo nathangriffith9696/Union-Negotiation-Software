@@ -9,6 +9,7 @@ import {
   ListErrorCard,
   ListLoadingCard,
 } from "@/components/entity-list/EntityListStates";
+import { ProposalSaveTracePanel } from "@/components/debug/ProposalSaveTracePanel";
 import { ProposalsPrintDocument } from "@/components/proposals/ProposalsPrintDocument";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
@@ -401,6 +402,15 @@ function ProposalsPageContent() {
           />
         </>
       ) : null}
+
+      <ProposalSaveTracePanel
+        rows={rows.map((p) => ({
+          id: p.id,
+          bodyHtml: p.bodyHtml,
+          title: p.title,
+        }))}
+        listReady={status === "ready" || status === "empty"}
+      />
     </>
   );
 }

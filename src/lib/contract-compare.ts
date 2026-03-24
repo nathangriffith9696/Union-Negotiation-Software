@@ -729,22 +729,46 @@ function sectionBodyPlainWithProvenanceFromRoot(root: HTMLElement): {
   );
 }
 
-function wrapTextSegment(textNode: Text, start: number, end: number): void {
-  if (end <= start) return;
+/**
+ * Apply several non-overlapping [start,end) wraps on one text node in a single replace.
+ * Needed when multiple diff-added ranges map to the same node: repeated replaceChild would
+ * detach the node after the first wrap and leave later ops stale.
+ */
+function wrapMultipleSegmentsOnTextNode(
+  textNode: Text,
+  segments: { start: number; end: number }[]
+): void {
   const doc = textNode.ownerDocument;
   const parent = textNode.parentNode;
-  if (!doc || !parent) return;
+  if (!doc || !parent || segments.length === 0) return;
   const full = textNode.textContent ?? "";
-  if (start < 0 || end > full.length) return;
-  const before = full.slice(0, start);
-  const mid = full.slice(start, end);
-  const after = full.slice(end);
+  const sorted = [...segments].sort((a, b) => a.start - b.start);
+  const merged: { start: number; end: number }[] = [];
+  for (const s of sorted) {
+    if (s.end <= s.start) continue;
+    if (s.start < 0 || s.end > full.length) continue;
+    const last = merged[merged.length - 1];
+    if (last && s.start <= last.end) {
+      last.end = Math.max(last.end, s.end);
+    } else {
+      merged.push({ start: s.start, end: s.end });
+    }
+  }
+  if (merged.length === 0) return;
   const frag = doc.createDocumentFragment();
-  if (before) frag.appendChild(doc.createTextNode(before));
-  const strong = doc.createElement("strong");
-  strong.appendChild(doc.createTextNode(mid));
-  frag.appendChild(strong);
-  if (after) frag.appendChild(doc.createTextNode(after));
+  let pos = 0;
+  for (const seg of merged) {
+    if (pos < seg.start) {
+      frag.appendChild(doc.createTextNode(full.slice(pos, seg.start)));
+    }
+    const strong = doc.createElement("strong");
+    strong.appendChild(doc.createTextNode(full.slice(seg.start, seg.end)));
+    frag.appendChild(strong);
+    pos = seg.end;
+  }
+  if (pos < full.length) {
+    frag.appendChild(doc.createTextNode(full.slice(pos)));
+  }
   parent.replaceChild(frag, textNode);
 }
 
@@ -776,16 +800,11 @@ function addedRangesToWrapOps(
   return ops;
 }
 
-function sortWrapOpsForSafeApplication(
-  ops: { node: Text; start: number; end: number }[]
-): void {
-  ops.sort((a, b) => {
-    if (a.node === b.node) return b.start - a.start;
-    const pos = a.node.compareDocumentPosition(b.node);
-    if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return 1;
-    if (pos & Node.DOCUMENT_POSITION_PRECEDING) return -1;
-    return 0;
-  });
+function compareTextNodesDocumentOrder(a: Text, b: Text): number {
+  const pos = a.compareDocumentPosition(b);
+  if (pos & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
+  if (pos & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+  return 0;
 }
 
 /**
@@ -841,8 +860,16 @@ export function wrapDiffAdditionsInProposalBodyHtml(
   }
 
   const ops = addedRangesToWrapOps(addedRanges, prov);
-  sortWrapOpsForSafeApplication(ops);
-  for (const op of ops) wrapTextSegment(op.node, op.start, op.end);
+  const byNode = new Map<Text, { start: number; end: number }[]>();
+  for (const op of ops) {
+    const list = byNode.get(op.node);
+    if (list) list.push({ start: op.start, end: op.end });
+    else byNode.set(op.node, [{ start: op.start, end: op.end }]);
+  }
+  const nodes = [...byNode.keys()].sort(compareTextNodesDocumentOrder);
+  for (const node of nodes) {
+    wrapMultipleSegmentsOnTextNode(node, byNode.get(node)!);
+  }
 
   return root.innerHTML;
 }

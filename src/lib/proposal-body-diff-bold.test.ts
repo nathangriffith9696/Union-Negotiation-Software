@@ -105,6 +105,22 @@ describe("wrapDiffAdditionsInProposalBodyHtml", () => {
     expect(out).toMatch(/<strong>ADDED<\/strong>/);
   });
 
+  it("bolds every diff addition that maps to the same text node after a strike (regression)", () => {
+    const prev = contractDoc([
+      { heading: "Article 1", bodyHtml: "<p>was 4pm meeting</p>" },
+    ]);
+    const next = contractDoc([
+      {
+        heading: "Article 1",
+        bodyHtml: "<p>was <s>4pm</s> 5pm meeting extra words</p>",
+      },
+    ]);
+    const out = wrapArticleRow(prev, next, "Article 1");
+    expect(out).toContain("<s>");
+    expect(out).toMatch(/<strong>5pm<\/strong>/);
+    expect(out).toMatch(/<strong>extra words<\/strong>/);
+  });
+
   it("handles extra whitespace in HTML that collapses to diff plain", () => {
     const prev = contractDoc([
       { heading: "Article 1", bodyHtml: "<p>a    b</p>" },
@@ -126,9 +142,9 @@ describe("wrapDiffAdditionsInProposalBodyHtml", () => {
   it("returns original HTML when parts claim added text that is not in order", () => {
     const html = "<p>abc</p>";
     const parts: Change[] = [
-      { value: "a", added: false, removed: false },
-      { value: "z", added: true, removed: false },
-      { value: "bc", added: false, removed: false },
+      { value: "a", count: 1, added: false, removed: false },
+      { value: "z", count: 1, added: true, removed: false },
+      { value: "bc", count: 2, added: false, removed: false },
     ];
     const out = wrapDiffAdditionsInProposalBodyHtml(html, parts);
     expect(out).toBe(html);

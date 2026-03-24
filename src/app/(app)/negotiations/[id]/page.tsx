@@ -12,6 +12,7 @@ import {
   NewProposalBodyEditor,
   type NewProposalBodyEditorHandle,
 } from "@/components/proposals/NewProposalBodyEditor";
+import { ProposalSaveTracePanel } from "@/components/debug/ProposalSaveTracePanel";
 import { PageHeader } from "@/components/ui/PageHeader";
 import {
   documentsMockForUi,
@@ -388,6 +389,8 @@ export default function NegotiationDetailPage() {
   const [notes, setNotes] = useState<NoteItemVM[]>([]);
   const [documents, setDocuments] = useState<DocumentItemVM[]>([]);
   const [activeTab, setActiveTab] = useState<WorkspaceTabId>("summary");
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
 
   const [sessionModalOpen, setSessionModalOpen] = useState(false);
   const [newSessionTitle, setNewSessionTitle] = useState("");
@@ -464,13 +467,28 @@ export default function NegotiationDetailPage() {
         typeof window !== "undefined"
           ? window.location.hash.replace(/^#/, "").toLowerCase()
           : "";
-      if (h === "proposals") setActiveTab("proposals");
-      else setActiveTab("summary");
+      if (h === "proposals") {
+        setActiveTab("proposals");
+        if (isSupabaseConfigured() && id) void loadProposals();
+      } else {
+        setActiveTab("summary");
+      }
     };
     applyHashTab();
     window.addEventListener("hashchange", applyHashTab);
     return () => window.removeEventListener("hashchange", applyHashTab);
-  }, [id]);
+  }, [id, loadProposals]);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured() || status !== "ready") return;
+    const onVis = () => {
+      if (document.visibilityState !== "visible") return;
+      if (activeTabRef.current !== "proposals") return;
+      void loadProposals();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [status, loadProposals]);
 
   useEffect(() => {
     if (!id) {
@@ -941,7 +959,16 @@ export default function NegotiationDetailPage() {
               aria-selected={selected}
               aria-controls={`negotiation-panel-${tab.id}`}
               tabIndex={selected ? 0 : -1}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => {
+                setActiveTab(tab.id);
+                if (
+                  tab.id === "proposals" &&
+                  isSupabaseConfigured() &&
+                  status === "ready"
+                ) {
+                  void loadProposals();
+                }
+              }}
               className={`shrink-0 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium transition-colors ${
                 selected
                   ? "border-slate-900 text-slate-900"
@@ -1631,6 +1658,15 @@ export default function NegotiationDetailPage() {
           </div>
         </div>
       ) : null}
+
+      <ProposalSaveTracePanel
+        rows={proposals.map((p) => ({
+          id: p.id,
+          bodyHtml: p.body_html,
+          title: p.title,
+        }))}
+        listReady={status === "ready"}
+      />
     </>
   );
 }

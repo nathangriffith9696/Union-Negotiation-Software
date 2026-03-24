@@ -4,7 +4,10 @@ import {
   wrapDiffAdditionsInProposalBodyHtml,
   type SectionDiffRow,
 } from "@/lib/contract-compare";
-import { titlesAlignForProposal } from "@/lib/proposal-candidate-reconcile";
+import {
+  proposalSaveGroupKey,
+  titlesAlignForProposal,
+} from "@/lib/proposal-candidate-reconcile";
 
 /** Mirrors `buildDefaultProposalReviewFields` in ContractEditorPanel. */
 function defaultTitleFromHeading(headingLabel: string): string {
@@ -21,8 +24,8 @@ type ReviewItem = {
 };
 
 /**
- * Mirrors `handleSaveSelectedProposals` payload construction (same row `r` for
- * body; title guard via `titlesAlignForProposal`).
+ * Mirrors `handleSaveSelectedProposals`: group by {@link proposalSaveGroupKey},
+ * merge wrapped bodies in diff order, one payload per group.
  */
 function buildInsertPayload(
   rows: SectionDiffRow[],
@@ -41,23 +44,43 @@ function buildInsertPayload(
     negotiation_id: string;
   }[] = [];
 
-  for (const r of rows) {
-    const it = reviewByIndex[r.index];
-    if (!it?.include) continue;
-    const defaults = { title: defaultTitleFromHeading(r.headingLabel) };
-    const resolvedTitle = it.title.trim() || defaults.title;
-    const titleForSave = titlesAlignForProposal(r.headingLabel, resolvedTitle)
+  const selected = rows
+    .filter((r) => reviewByIndex[r.index]?.include)
+    .sort((a, b) => a.index - b.index);
+  const byGroup = new Map<string, SectionDiffRow[]>();
+  for (const r of selected) {
+    const k = proposalSaveGroupKey(r.headingLabel);
+    const g = byGroup.get(k);
+    if (g) g.push(r);
+    else byGroup.set(k, [r]);
+  }
+
+  for (const groupRows of byGroup.values()) {
+    groupRows.sort((a, b) => a.index - b.index);
+    const primary = groupRows[0]!;
+    const it0 = reviewByIndex[primary.index]!;
+    const defaults = { title: defaultTitleFromHeading(primary.headingLabel) };
+    const resolvedTitle = it0.title.trim() || defaults.title;
+    const titleForSave = titlesAlignForProposal(
+      primary.headingLabel,
+      resolvedTitle
+    )
       ? resolvedTitle
       : defaults.title;
-    const rawBody = r.newBodyHtml?.trim() ?? "";
-    const bodyHtml = rawBody
-      ? wrapDiffAdditionsInProposalBodyHtml(rawBody, r.parts)
-      : "";
+    const mergedBodyHtml =
+      groupRows
+        .map((r) => {
+          const raw = r.newBodyHtml?.trim();
+          if (!raw) return "";
+          return wrapDiffAdditionsInProposalBodyHtml(raw, r.parts);
+        })
+        .join("") || "";
+
     out.push({
       negotiation_id: negotiationId,
       title: titleForSave.trim() || "Contract change proposal",
-      category: it.category.trim() || "general",
-      body_html: bodyHtml || null,
+      category: it0.category.trim() || "general",
+      body_html: mergedBodyHtml || null,
     });
   }
   return out;
@@ -145,5 +168,54 @@ describe("draft review → save payload (mirrors ContractCompareView save path)"
     expect(for36!.body_html).toContain("INS_A36_UNIQUE");
     expect(for36!.title).toContain("Article 36");
     expect(for36!.title).not.toContain("Article 99");
+  });
+
+  it("merges two selected diff rows for the same article number into one payload", () => {
+    const rows: SectionDiffRow[] = [
+      {
+        index: 1,
+        headingLabel: "Article 1",
+        newBodyHtml: "<p>alpha</p>",
+        parts: [],
+        addedWords: 1,
+        removedWords: 0,
+        addedChars: 1,
+        removedChars: 0,
+        hasChange: true,
+      },
+      {
+        index: 2,
+        headingLabel: "Article 1 — Recognition",
+        newBodyHtml: "<p>beta</p>",
+        parts: [],
+        addedWords: 1,
+        removedWords: 0,
+        addedChars: 1,
+        removedChars: 0,
+        hasChange: true,
+      },
+    ];
+    const review: Record<number, ReviewItem> = {
+      1: {
+        include: true,
+        title: "Article 1",
+        category: "general",
+        summary: "note one",
+      },
+      2: {
+        include: true,
+        title: "Article 1 — Recognition",
+        category: "general",
+        summary: "note two",
+      },
+    };
+    expect(proposalSaveGroupKey(rows[0]!.headingLabel)).toBe(
+      proposalSaveGroupKey(rows[1]!.headingLabel)
+    );
+
+    const payload = buildInsertPayload(rows, review, "neg-test-uuid");
+    expect(payload).toHaveLength(1);
+    expect(payload[0]!.body_html).toContain("alpha");
+    expect(payload[0]!.body_html).toContain("beta");
   });
 });

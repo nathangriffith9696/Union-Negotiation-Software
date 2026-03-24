@@ -5,6 +5,20 @@ const PREAMBLE_PATTERN =
 /** Numeric article: "Article 1", "ARTICLE 12 — …", etc. */
 const ARTICLE_NUM_PATTERN = /\barticle\s+(\d+)\b/i;
 
+/**
+ * First `Article N` index in the string (case-insensitive), or `null` if none.
+ * Matches {@link proposalArticleSortKey} / bargaining-order logic.
+ */
+export function extractArticleNumberFromTitle(title: string): number | null {
+  const t = title.trim();
+  if (!t) return null;
+  const articleMatch = ARTICLE_NUM_PATTERN.exec(t);
+  if (!articleMatch) return null;
+  const n = Number.parseInt(articleMatch[1]!, 10);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
+}
+
 type ArticleSortBucket = "preamble" | "article" | "other";
 
 export type ProposalArticleSortKey = {
@@ -16,12 +30,9 @@ export type ProposalArticleSortKey = {
 /** Exposed for tests or tooling. */
 export function proposalArticleSortKey(title: string): ProposalArticleSortKey {
   const t = title.trim();
-  const articleMatch = ARTICLE_NUM_PATTERN.exec(t);
-  if (articleMatch) {
-    const n = Number.parseInt(articleMatch[1]!, 10);
-    if (Number.isFinite(n) && n >= 0) {
-      return { bucket: "article", articleNumber: n };
-    }
+  const n = extractArticleNumberFromTitle(t);
+  if (n !== null) {
+    return { bucket: "article", articleNumber: n };
   }
   if (PREAMBLE_PATTERN.test(t)) {
     return { bucket: "preamble", articleNumber: null };
