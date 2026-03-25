@@ -223,6 +223,204 @@ describe("proposalSaveGroupKey", () => {
   });
 });
 
+describe("matchChangedRowsToSavedProposals", () => {
+  it("ignores submitted rows so a partial snapshot cannot hide work still pending vs the draft (grouped-save regression)", () => {
+    const saved: SavedProposalForReconcile[] = [
+      {
+        id: "sub-partial",
+        title: "Article 1 — Scope",
+        body_html: "<p>scope</p>",
+        status: "submitted",
+        created_at: "2025-03-15T12:00:00Z",
+      },
+      {
+        id: "draft-merged",
+        title: "Article 1 — Scope",
+        body_html: "<p>scope</p><p>hours</p>",
+        status: "draft",
+        created_at: "2025-03-01T12:00:00Z",
+      },
+    ];
+    const row = diffRow(0, "Article 1 — Scope", "<p>scope</p>", []);
+    const canon = (r: SectionDiffRow) => r.newBodyHtml.trim();
+    const matched = matchChangedRowsToSavedProposals([row], saved, canon);
+    expect(matched.has(row.index)).toBe(false);
+  });
+
+  describe("QA: draft-only reconciliation (contract editor proposal review)", () => {
+    const canon = (r: SectionDiffRow) => r.newBodyHtml.trim();
+
+    it("1. existing draft + new text in that article → row not matched (shows in proposal review)", () => {
+      const saved: SavedProposalForReconcile[] = [
+        row({
+          id: "d-a3",
+          title: "Article 3",
+          body_html: "<p>stored</p>",
+          created_at: "2025-01-01T00:00:00Z",
+        }),
+      ];
+      const rowCh = diffRow(0, "Article 3", "<p>stored plus edit</p>", []);
+      const matched = matchChangedRowsToSavedProposals([rowCh], saved, canon);
+      expect(matched.has(rowCh.index)).toBe(false);
+    });
+
+    it("1b. when working subsection body still matches the draft → row matched (not in unmatched review)", () => {
+      const saved: SavedProposalForReconcile[] = [
+        row({
+          id: "d-a3",
+          title: "Article 3",
+          body_html: "<p>in sync</p>",
+          created_at: "2025-01-01T00:00:00Z",
+        }),
+      ];
+      const rowCh = diffRow(0, "Article 3", "<p>in sync</p>", []);
+      const matched = matchChangedRowsToSavedProposals([rowCh], saved, canon);
+      expect(matched.get(rowCh.index)?.id).toBe("d-a3");
+    });
+
+    it("2. newer submitted matches canon but draft does not → submitted does not suppress review", () => {
+      const saved: SavedProposalForReconcile[] = [
+        {
+          id: "sub-new",
+          title: "Article 4",
+          body_html: "<p>snapshot</p>",
+          status: "submitted",
+          created_at: "2025-06-01T00:00:00Z",
+        },
+        {
+          id: "d-old",
+          title: "Article 4",
+          body_html: "<p>older draft</p>",
+          status: "draft",
+          created_at: "2025-01-01T00:00:00Z",
+        },
+      ];
+      const rowCh = diffRow(0, "Article 4", "<p>snapshot</p>", []);
+      const matched = matchChangedRowsToSavedProposals([rowCh], saved, canon);
+      expect(matched.has(rowCh.index)).toBe(false);
+    });
+
+    it("3. save path still targets the aligning draft for in-place update (submitted does not steal id)", () => {
+      const saved: SavedProposalForReconcile[] = [
+        {
+          id: "sub-new",
+          title: "Article 4",
+          body_html: "<p>snapshot</p>",
+          status: "submitted",
+          created_at: "2025-06-01T00:00:00Z",
+        },
+        {
+          id: "d-old",
+          title: "Article 4",
+          body_html: "<p>older draft</p>",
+          status: "draft",
+          created_at: "2025-01-01T00:00:00Z",
+        },
+      ];
+      const rowCh = diffRow(0, "Article 4", "<p>revised for save</p>", []);
+      expect(findNewestAligningDraftProposalId(rowCh.headingLabel, saved)).toBe(
+        "d-old"
+      );
+    });
+
+    it("4. multiple articles in one diff → each row matches only its own draft", () => {
+      const saved: SavedProposalForReconcile[] = [
+        row({
+          id: "d-b",
+          title: "Article 2",
+          body_html: "<p>b</p>",
+          created_at: "2025-02-01T00:00:00Z",
+        }),
+        row({
+          id: "d-a",
+          title: "Article 1",
+          body_html: "<p>a</p>",
+          created_at: "2025-01-01T00:00:00Z",
+        }),
+      ];
+      const r1 = diffRow(0, "Article 1", "<p>a</p>", []);
+      const r2 = diffRow(1, "Article 2", "<p>b</p>", []);
+      const matched = matchChangedRowsToSavedProposals([r1, r2], saved, canon);
+      expect(matched.get(r1.index)?.id).toBe("d-a");
+      expect(matched.get(r2.index)?.id).toBe("d-b");
+    });
+  });
+
+  describe("QA: group-level reconciliation (newest draft + merged body only)", () => {
+    const canon = (r: SectionDiffRow) => r.newBodyHtml.trim();
+
+    it("1. newer merged draft + older partial — subsection canon does not fall through to partial draft", () => {
+      const saved: SavedProposalForReconcile[] = [
+        row({
+          id: "draft-merged",
+          title: "Article 1 — Scope",
+          body_html: "<p>a</p><p>b</p>",
+          created_at: "2025-03-01T12:00:00Z",
+        }),
+        row({
+          id: "draft-partial",
+          title: "Article 1 — Scope",
+          body_html: "<p>a</p>",
+          created_at: "2025-01-01T12:00:00Z",
+        }),
+      ];
+      const r = diffRow(0, "Article 1 — Scope", "<p>a</p>", []);
+      const matched = matchChangedRowsToSavedProposals([r], saved, canon);
+      expect(matched.has(r.index)).toBe(false);
+    });
+
+    it("2. after save, edit one subsection — merged canon ≠ newest draft → group unmatched", () => {
+      const saved: SavedProposalForReconcile[] = [
+        row({
+          id: "d1",
+          title: "Article 6",
+          body_html: "<p>was saved</p>",
+          created_at: "2025-01-01T00:00:00Z",
+        }),
+      ];
+      const r = diffRow(0, "Article 6", "<p>edited after save</p>", []);
+      expect(matchChangedRowsToSavedProposals([r], saved, canon).has(r.index)).toBe(
+        false
+      );
+    });
+
+    it("3. multiple rows same article:1 group — merged equals newest draft → all indices matched", () => {
+      const saved: SavedProposalForReconcile[] = [
+        row({
+          id: "merged-a1",
+          title: "Article 1 — Alpha",
+          body_html: "<p>x</p><p>y</p>",
+          created_at: "2025-01-01T00:00:00Z",
+        }),
+      ];
+      const r1 = diffRow(0, "Article 1 — Alpha", "<p>x</p>", []);
+      const r2 = diffRow(1, "Article 1 — Beta", "<p>y</p>", []);
+      expect(proposalSaveGroupKey(r1.headingLabel)).toBe(
+        proposalSaveGroupKey(r2.headingLabel)
+      );
+      const matched = matchChangedRowsToSavedProposals([r1, r2], saved, canon);
+      expect(matched.get(r1.index)?.id).toBe("merged-a1");
+      expect(matched.get(r2.index)?.id).toBe("merged-a1");
+    });
+
+    it("3b. multiple rows same group — merged differs from draft → none matched", () => {
+      const saved: SavedProposalForReconcile[] = [
+        row({
+          id: "merged-a1",
+          title: "Article 1 — Alpha",
+          body_html: "<p>x</p><p>y</p>",
+          created_at: "2025-01-01T00:00:00Z",
+        }),
+      ];
+      const r1 = diffRow(0, "Article 1 — Alpha", "<p>x</p>", []);
+      const r2 = diffRow(1, "Article 1 — Beta", "<p>y-changed</p>", []);
+      const matched = matchChangedRowsToSavedProposals([r1, r2], saved, canon);
+      expect(matched.has(r1.index)).toBe(false);
+      expect(matched.has(r2.index)).toBe(false);
+    });
+  });
+});
+
 describe("draft review visibility vs save path (scenario 5)", () => {
   it("does not treat a section as body-matched when the draft body has diverged (stays actionable)", () => {
     const saved: SavedProposalForReconcile[] = [

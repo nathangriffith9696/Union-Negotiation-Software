@@ -352,6 +352,7 @@ function ContractCompareView({
   baselineLabel,
   showProposalReview = true,
   compareContextLine,
+  onAfterProposalsSaved,
 }: {
   negotiationId: string;
   /** Older / baseline side of the diff (formal snapshot HTML). */
@@ -363,6 +364,11 @@ function ContractCompareView({
   showProposalReview?: boolean;
   /** Shown under “Detected changes”, e.g. “Working draft vs Version 3”. */
   compareContextLine?: string;
+  /**
+   * After proposals persist successfully, sync `negotiation_contract_drafts` to the
+   * current editor HTML so reopening the workspace does not load stale draft content.
+   */
+  onAfterProposalsSaved?: () => Promise<void>;
 }) {
   const router = useRouter();
   const rows = useMemo(
@@ -771,6 +777,19 @@ function ContractCompareView({
         );
         console.log(JSON.stringify(article1Trace, null, 2));
         console.groupEnd();
+      }
+
+      if (onAfterProposalsSaved) {
+        try {
+          await onAfterProposalsSaved();
+        } catch (e) {
+          setSaveProposalsError(
+            e instanceof Error
+              ? `Proposals saved, but the working draft could not be updated: ${e.message.trim() || "Save failed."}`
+              : "Proposals saved, but the working draft could not be updated. Open the contract editor and use Save draft, then try again."
+          );
+          return;
+        }
       }
 
       router.push(
@@ -2480,6 +2499,11 @@ export function ContractEditorPanel({
                     ? `Working draft vs Version ${baselineVersionRow.version_number}`
                     : "Working draft — add a snapshot to set a proposal baseline"
                 }
+                onAfterProposalsSaved={async () => {
+                  if (!editor || editor.isEmpty) return;
+                  await persistDraftFromHtml(editor.getHTML());
+                  setLoadedIntoEditorVersion(null);
+                }}
               />
             </div>
           </Card>

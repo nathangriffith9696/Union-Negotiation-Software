@@ -96,31 +96,70 @@ export function proposalMatchesDiffCandidate(
   canonicalRowBody: string,
   saved: SavedProposalForReconcile
 ): boolean {
+  // Only drafts represent the editable proposal line. Submitted (or other) rows are
+  // historical snapshots: matching them would hide sections that still differ from the
+  // current draft after a grouped save (draft body is merged; submitted may be a partial
+  // or older snapshot that equals one subsection’s canonical HTML).
+  if (saved.status !== "draft") return false;
   if (!titlesAlignForProposal(row.headingLabel, saved.title)) return false;
   return bodiesMatch(canonicalRowBody, saved.body_html);
 }
 
 /**
- * Greedy one-to-one match: each saved row used at most once; prefer newest proposals first
- * (pass `saved` already ordered by created_at desc).
+ * Merges per-row canonical bodies in diff-index order — same concatenation as grouped save
+ * ({@link proposalSaveGroupKey} batches, then ascending `row.index`).
+ */
+export function mergedCanonicalBodyForProposalGroup(
+  groupRows: SectionDiffRow[],
+  getCanonicalRowBody: (row: SectionDiffRow) => string
+): string {
+  const sorted = [...groupRows].sort((a, b) => a.index - b.index);
+  return sorted.map((r) => getCanonicalRowBody(r)).join("");
+}
+
+/**
+ * Group-level reconciliation aligned with grouped save: each {@link proposalSaveGroupKey}
+ * bucket compares **once** against the **newest aligning draft** only
+ * ({@link findNewestAligningDraftProposalId}). Merged canonical body must equal that draft’s
+ * `body_html` (normalized HTML equality) for every changed row in the group to count as
+ * already saved. Older partial drafts are never consulted.
  */
 export function matchChangedRowsToSavedProposals(
   changedRows: SectionDiffRow[],
   saved: SavedProposalForReconcile[],
   getCanonicalRowBody: (row: SectionDiffRow) => string
 ): Map<number, SavedProposalForReconcile> {
-  const used = new Set<string>();
   const out = new Map<number, SavedProposalForReconcile>();
+  const savedById = new Map(saved.map((p) => [p.id, p] as const));
 
+  const byGroup = new Map<string, SectionDiffRow[]>();
   for (const row of changedRows) {
-    const canon = getCanonicalRowBody(row);
-    for (const p of saved) {
-      if (used.has(p.id)) continue;
-      if (proposalMatchesDiffCandidate(row, canon, p)) {
-        out.set(row.index, p);
-        used.add(p.id);
-        break;
-      }
+    const k = proposalSaveGroupKey(row.headingLabel);
+    const g = byGroup.get(k);
+    if (g) g.push(row);
+    else byGroup.set(k, [row]);
+  }
+
+  for (const rows of byGroup.values()) {
+    rows.sort((a, b) => a.index - b.index);
+    const primary = rows[0]!;
+    const draftId = findNewestAligningDraftProposalId(
+      primary.headingLabel,
+      saved
+    );
+    if (!draftId) continue;
+
+    const p = savedById.get(draftId);
+    if (!p || p.status !== "draft") continue;
+
+    const mergedCanon = mergedCanonicalBodyForProposalGroup(
+      rows,
+      getCanonicalRowBody
+    );
+    if (!bodiesMatch(mergedCanon, p.body_html)) continue;
+
+    for (const r of rows) {
+      out.set(r.index, p);
     }
   }
 

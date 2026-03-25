@@ -232,6 +232,18 @@ describe("buildSectionDiffRows", () => {
     expect(row.hasChange).toBe(false);
   });
 
+  it("new-only section: body entirely struck still hasChange (strike-stripped plain is empty vs baseline empty)", () => {
+    const prev = contractHtml(undefined, [{ heading: "Article 1", body: "Keep" }]);
+    const next = contractHtml(undefined, [
+      { heading: "Article 1", body: "Keep" },
+      { heading: "Article 4", body: "<s>Proposed language</s>" },
+    ]);
+    const row = buildSectionDiffRows(prev, next).find(
+      (r) => r.headingLabel === "Article 4"
+    )!;
+    expect(row.hasChange).toBe(true);
+  });
+
   it("treats <del> like strike for comparison", () => {
     const prev = contractHtml(undefined, [
       { heading: "Hours", body: "Keep remove keep." },

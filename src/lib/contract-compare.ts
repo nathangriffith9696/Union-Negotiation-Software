@@ -347,19 +347,44 @@ function matchedHeadingLabel(oldHeading: string, newHeading: string): string {
   return `${newHeading} (was: ${oldHeading})`;
 }
 
+/**
+ * Text still present in the editor for a section body, **including** inside &lt;s&gt; / strike / del.
+ * {@link plainTextExcludingStrike} omits struck text, so a new-only section whose body is
+ * entirely struck yields empty prev/next plains for the diff — use this to detect real markup.
+ */
+function plainTextIncludingStrikeFromSectionBodyHtml(html: string): string {
+  if (typeof document === "undefined") return "";
+  const wrap = document.createElement("div");
+  wrap.innerHTML = html.trim() ? html : "";
+  return (wrap.textContent ?? "")
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function buildDiffRow(
   index: number,
   headingLabel: string,
   prevPlain: string,
   nextPlain: string,
-  newBodyHtml: string
+  newBodyHtml: string,
+  opts?: { baselineHadNoMatchingSection?: boolean }
 ): SectionDiffRow {
   const parts = diffWordsWithSpace(prevPlain, nextPlain);
   const stats = analyzeParts(parts);
-  const hasChange =
+  let hasChange =
     stats.addedWords > 0 ||
     stats.removedWords > 0 ||
     prevPlain !== nextPlain;
+  if (
+    !hasChange &&
+    opts?.baselineHadNoMatchingSection &&
+    !prevPlain.trim() &&
+    !nextPlain.trim()
+  ) {
+    const loose = plainTextIncludingStrikeFromSectionBodyHtml(newBodyHtml);
+    if (loose.length > 0) hasChange = true;
+  }
   return {
     index,
     headingLabel,
@@ -549,7 +574,9 @@ export function buildSectionDiffRows(
       );
     } else {
       rows.push(
-        buildDiffRow(rowIndex++, newBlock.heading, "", newBlock.plain, bodyHtml)
+        buildDiffRow(rowIndex++, newBlock.heading, "", newBlock.plain, bodyHtml, {
+          baselineHadNoMatchingSection: true,
+        })
       );
     }
   }
