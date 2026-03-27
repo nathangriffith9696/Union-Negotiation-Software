@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { Card } from "@/components/ui/Card";
 import {
   createSupabaseClient,
@@ -19,6 +19,8 @@ export function LoginForm() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<"magic" | "password" | null>(null);
+  const emailInputRef = useRef<HTMLInputElement>(null);
+  const passwordInputRef = useRef<HTMLInputElement>(null);
 
   if (!isSupabaseConfigured()) {
     return (
@@ -74,12 +76,25 @@ export function LoginForm() {
     e.preventDefault();
     setError(null);
     setMessage(null);
+    const emailVal = (
+      emailInputRef.current?.value ??
+      email
+    ).trim();
+    const pwd = (passwordInputRef.current?.value ?? password).trim();
+    if (!emailVal) {
+      setError("Enter your email in the field above.");
+      return;
+    }
+    if (!pwd) {
+      setError("Enter your password.");
+      return;
+    }
     setLoading("password");
     try {
       const supabase = createSupabaseClient();
       const { error: err } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
+        email: emailVal,
+        password: pwd,
       });
       if (err) {
         setError(err.message);
@@ -111,7 +126,11 @@ export function LoginForm() {
         </p>
       ) : null}
 
-      <form onSubmit={sendMagicLink} className="mt-6 space-y-4">
+      <form
+        method="post"
+        onSubmit={sendMagicLink}
+        className="mt-6 space-y-4"
+      >
         <div>
           <label
             htmlFor="login-email"
@@ -120,12 +139,14 @@ export function LoginForm() {
             Email
           </label>
           <input
+            ref={emailInputRef}
             id="login-email"
             type="email"
             autoComplete="email"
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
+            onInput={(e) => setEmail(e.currentTarget.value)}
             className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-300"
           />
         </div>
@@ -147,7 +168,11 @@ export function LoginForm() {
         </div>
       </div>
 
-      <form onSubmit={signInWithPassword} className="space-y-4">
+      <form
+        method="post"
+        onSubmit={signInWithPassword}
+        className="space-y-4"
+      >
         <div>
           <label
             htmlFor="login-password"
@@ -156,17 +181,19 @@ export function LoginForm() {
             Password
           </label>
           <input
+            ref={passwordInputRef}
             id="login-password"
             type="password"
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
+            onInput={(e) => setPassword(e.currentTarget.value)}
             className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-300"
           />
         </div>
         <button
           type="submit"
-          disabled={loading !== null || !password}
+          disabled={loading !== null}
           className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {loading === "password" ? "Signing in…" : "Sign in with password"}

@@ -198,6 +198,18 @@ export type NegotiationContractDraftRow = {
   updated_at: string;
 };
 
+/** Canonical uploaded CBA text per local charter (versioned). */
+export type MasterContractRow = {
+  id: string;
+  local_id: string;
+  version_number: number;
+  body_text: string;
+  body_html: string;
+  file_name: string | null;
+  created_at: string;
+  created_by: string | null;
+};
+
 /** Insert payloads (omit DB defaults where optional). */
 export type DistrictInsert = Omit<DistrictRow, "id" | "created_at"> &
   Partial<Pick<DistrictRow, "id" | "created_at">>;
@@ -272,6 +284,17 @@ export type NegotiationContractDraftInsert = Omit<
 > &
   Partial<Pick<NegotiationContractDraftRow, "updated_at">>;
 
+export type MasterContractInsert = Omit<
+  MasterContractRow,
+  "id" | "created_at" | "created_by"
+> &
+  Partial<Pick<MasterContractRow, "id" | "created_at" | "created_by">>;
+
+/** RLS should deny updates in production; type kept for Supabase client inference. */
+export type MasterContractUpdate = Partial<
+  Pick<MasterContractRow, "file_name" | "body_text" | "body_html">
+>;
+
 export type NegotiationContractDraftUpdate = Partial<
   Omit<NegotiationContractDraftRow, "negotiation_id">
 >;
@@ -330,52 +353,89 @@ export type UnionNegotiationDatabase = {
         Row: ProfileRow;
         Insert: ProfileInsert;
         Update: ProfileUpdate;
+        Relationships: [];
       };
       local_assignments: {
         Row: LocalAssignmentRow;
         Insert: LocalAssignmentInsert;
         Update: LocalAssignmentUpdate;
+        Relationships: [];
       };
-      districts: { Row: DistrictRow; Insert: DistrictInsert; Update: DistrictUpdate };
-      locals: { Row: LocalRow; Insert: LocalInsert; Update: LocalUpdate };
+      districts: {
+        Row: DistrictRow;
+        Insert: DistrictInsert;
+        Update: DistrictUpdate;
+        Relationships: [];
+      };
+      locals: {
+        Row: LocalRow;
+        Insert: LocalInsert;
+        Update: LocalUpdate;
+        Relationships: [];
+      };
       bargaining_units: {
         Row: BargainingUnitRow;
         Insert: BargainingUnitInsert;
         Update: BargainingUnitUpdate;
+        Relationships: [];
       };
       negotiations: {
         Row: NegotiationRow;
         Insert: NegotiationInsert;
         Update: NegotiationUpdate;
+        Relationships: [];
       };
-      sessions: { Row: SessionRow; Insert: SessionInsert; Update: SessionUpdate };
+      sessions: {
+        Row: SessionRow;
+        Insert: SessionInsert;
+        Update: SessionUpdate;
+        Relationships: [];
+      };
       proposals: {
         Row: ProposalRow;
         Insert: ProposalInsert;
         Update: ProposalUpdate;
+        Relationships: [];
       };
       session_proposals: {
         Row: SessionProposalRow;
         Insert: SessionProposalInsert;
         Update: SessionProposalUpdate;
+        Relationships: [];
       };
-      notes: { Row: NoteRow; Insert: NoteInsert; Update: NoteUpdate };
+      notes: {
+        Row: NoteRow;
+        Insert: NoteInsert;
+        Update: NoteUpdate;
+        Relationships: [];
+      };
       documents: {
         Row: DocumentRow;
         Insert: DocumentInsert;
         Update: DocumentUpdate;
+        Relationships: [];
       };
       negotiation_contract_versions: {
         Row: NegotiationContractVersionRow;
         Insert: NegotiationContractVersionInsert;
         Update: NegotiationContractVersionUpdate;
+        Relationships: [];
       };
       negotiation_contract_drafts: {
         Row: NegotiationContractDraftRow;
         Insert: NegotiationContractDraftInsert;
         Update: NegotiationContractDraftUpdate;
+        Relationships: [];
+      };
+      master_contracts: {
+        Row: MasterContractRow;
+        Insert: MasterContractInsert;
+        Update: MasterContractUpdate;
+        Relationships: [];
       };
     };
+    Views: Record<string, never>;
+    Functions: Record<string, never>;
     Enums: {
       app_role: AppRole;
     };
