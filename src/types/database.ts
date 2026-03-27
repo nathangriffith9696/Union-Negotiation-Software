@@ -3,6 +3,9 @@
  * Use ISO 8601 strings for timestamps when reading from JSON/API.
  */
 
+/** Matches `public.app_role` enum in Supabase. */
+export type AppRole = "super_admin" | "regional_director" | "field_rep";
+
 export type NegotiationStatus =
   | "preparing"
   | "active"
@@ -49,6 +52,22 @@ export type DocumentType =
   | "minutes"
   | "correspondence"
   | "other";
+
+export type ProfileRow = {
+  id: string;
+  role: AppRole;
+  display_name: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LocalAssignmentRow = {
+  id: string;
+  user_id: string;
+  local_id: string;
+  assigned_by: string | null;
+  created_at: string;
+};
 
 export type DistrictRow = {
   id: string;
@@ -257,6 +276,23 @@ export type NegotiationContractDraftUpdate = Partial<
   Omit<NegotiationContractDraftRow, "negotiation_id">
 >;
 
+export type ProfileInsert = Omit<ProfileRow, "created_at" | "updated_at"> &
+  Partial<Pick<ProfileRow, "created_at" | "updated_at">>;
+
+export type ProfileUpdate = Partial<
+  Omit<ProfileRow, "id" | "created_at">
+>;
+
+export type LocalAssignmentInsert = Omit<
+  LocalAssignmentRow,
+  "id" | "created_at" | "assigned_by"
+> &
+  Partial<Pick<LocalAssignmentRow, "id" | "created_at" | "assigned_by">>;
+
+export type LocalAssignmentUpdate = Partial<
+  Omit<LocalAssignmentRow, "id" | "user_id" | "local_id" | "created_at">
+>;
+
 /** Partial updates by primary key. */
 export type DistrictUpdate = Partial<Omit<DistrictRow, "id" | "created_at">>;
 export type LocalUpdate = Partial<Omit<LocalRow, "id" | "created_at">>;
@@ -290,6 +326,16 @@ export type SessionProposalUpdate = Partial<
 export type UnionNegotiationDatabase = {
   public: {
     Tables: {
+      profiles: {
+        Row: ProfileRow;
+        Insert: ProfileInsert;
+        Update: ProfileUpdate;
+      };
+      local_assignments: {
+        Row: LocalAssignmentRow;
+        Insert: LocalAssignmentInsert;
+        Update: LocalAssignmentUpdate;
+      };
       districts: { Row: DistrictRow; Insert: DistrictInsert; Update: DistrictUpdate };
       locals: { Row: LocalRow; Insert: LocalInsert; Update: LocalUpdate };
       bargaining_units: {
@@ -329,6 +375,9 @@ export type UnionNegotiationDatabase = {
         Insert: NegotiationContractDraftInsert;
         Update: NegotiationContractDraftUpdate;
       };
+    };
+    Enums: {
+      app_role: AppRole;
     };
   };
 };

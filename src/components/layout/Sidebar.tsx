@@ -2,10 +2,16 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import {
+  formatAppRole,
+  fetchMyProfile,
+} from "@/lib/profiles";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
 } from "@/lib/supabase";
+import type { AppRole } from "@/types/database";
 
 function IconDashboard({ className }: { className?: string }) {
   return (
@@ -218,6 +224,24 @@ export function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const authEnabled = isSupabaseConfigured();
+  const [appRole, setAppRole] = useState<AppRole | null>(null);
+
+  useEffect(() => {
+    if (!authEnabled) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const supabase = createSupabaseClient();
+        const profile = await fetchMyProfile(supabase);
+        if (!cancelled && profile) setAppRole(profile.role);
+      } catch {
+        if (!cancelled) setAppRole(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authEnabled]);
 
   async function handleSignOut() {
     if (!authEnabled) return;
@@ -266,13 +290,23 @@ export function Sidebar() {
       </nav>
       <div className="border-t border-slate-800 p-4 text-xs text-slate-500">
         {authEnabled ? (
-          <button
-            type="button"
-            onClick={() => void handleSignOut()}
-            className="w-full rounded-lg border border-slate-600 bg-slate-800/50 px-3 py-2 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700/80 hover:text-white"
-          >
-            Sign out
-          </button>
+          <div className="space-y-2">
+            {appRole ? (
+              <p className="text-[11px] leading-snug text-slate-400">
+                Signed in as{" "}
+                <span className="font-medium text-slate-300">
+                  {formatAppRole(appRole)}
+                </span>
+              </p>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void handleSignOut()}
+              className="w-full rounded-lg border border-slate-600 bg-slate-800/50 px-3 py-2 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700/80 hover:text-white"
+            >
+              Sign out
+            </button>
+          </div>
         ) : (
           <p>Mock data · Internal use</p>
         )}
