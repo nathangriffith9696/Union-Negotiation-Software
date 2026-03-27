@@ -572,6 +572,9 @@ body {
     padding-bottom: 0.2em;
     border-bottom: 0.5pt solid #999;
     color: #000;
+    /* Keep title with the start of body text; long bodies must paginate (avoid break-inside on whole article). */
+    break-after: avoid;
+    page-break-after: avoid;
   }
 
   #proposals-print-document .packet-article-inline-meta {

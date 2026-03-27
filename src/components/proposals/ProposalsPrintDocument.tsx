@@ -123,10 +123,7 @@ export function ProposalsPrintDocument({
 
               <div className="packet-articles">
                 {group.proposals.map((p) => (
-                  <article
-                    key={p.id}
-                    className="packet-article print:break-inside-avoid"
-                  >
+                  <article key={p.id} className="packet-article">
                     <h3 className="packet-article-heading">{p.title}</h3>
                     {meta.kind === "mixed" ? (
                       <p className="packet-article-inline-meta">
