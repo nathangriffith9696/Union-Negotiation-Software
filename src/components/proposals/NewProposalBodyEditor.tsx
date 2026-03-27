@@ -1,9 +1,10 @@
 "use client";
 
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
 import { forwardRef, useImperativeHandle } from "react";
 import type { Editor } from "@tiptap/core";
+import { TipTapTablePopover } from "@/components/tiptap/TipTapTablePopover";
+import { contractEditorTipTapExtensions } from "@/lib/tiptap-contract-editor-extensions";
 
 export type NewProposalBodyEditorHandle = {
   /** Returns `null` when the document is empty (no visible text). */
@@ -37,6 +38,7 @@ function isEffectivelyEmptyProposalBody(html: string): boolean {
   const wrap = document.createElement("div");
   wrap.innerHTML = html.trim();
   if (wrap.querySelector("hr")) return false;
+  if (wrap.querySelector("table")) return false;
   return true;
 }
 
@@ -56,6 +58,7 @@ function ProposalBodyToolbar({ editor }: { editor: Editor | null }) {
           blockquote: false,
           code: false,
           codeBlock: false,
+          inTable: false,
         };
       }
       return {
@@ -68,6 +71,7 @@ function ProposalBodyToolbar({ editor }: { editor: Editor | null }) {
         blockquote: ed.isActive("blockquote"),
         code: ed.isActive("code"),
         codeBlock: ed.isActive("codeBlock"),
+        inTable: ed.isActive("table"),
       };
     },
   });
@@ -82,6 +86,7 @@ function ProposalBodyToolbar({ editor }: { editor: Editor | null }) {
     blockquote: false,
     code: false,
     codeBlock: false,
+    inTable: false,
   };
 
   const blockBtn =
@@ -193,6 +198,15 @@ function ProposalBodyToolbar({ editor }: { editor: Editor | null }) {
       >
         Rule
       </button>
+      <span
+        className="mx-0.5 hidden h-5 w-px shrink-0 bg-slate-200 sm:inline-block"
+        aria-hidden
+      />
+      <TipTapTablePopover
+        editor={editor}
+        inTable={t.inTable}
+        variant="proposal"
+      />
     </div>
   );
 }
@@ -200,7 +214,7 @@ function ProposalBodyToolbar({ editor }: { editor: Editor | null }) {
 export const NewProposalBodyEditor = forwardRef<NewProposalBodyEditorHandle>(
   function NewProposalBodyEditor(_props, ref) {
   const editor = useEditor({
-    extensions: [StarterKit],
+    extensions: contractEditorTipTapExtensions,
     content: "<p></p>",
     immediatelyRender: false,
     editorProps: {

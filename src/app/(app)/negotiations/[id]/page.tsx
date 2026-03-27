@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import {
   ListErrorCard,
   ListLoadingCard,
@@ -25,6 +32,7 @@ import {
   sessionsMockForUi,
 } from "@/data/mock";
 import { formatDate, formatOptionalDate, formatStatus } from "@/lib/format";
+import { deleteDraftProposalForNegotiation } from "@/lib/proposal-delete";
 import { sortProposalsByBargainingOrderSnake } from "@/lib/proposal-article-sort";
 import { labelsFromNegotiationsRelation } from "@/lib/supabase-embeds";
 import {
@@ -423,6 +431,24 @@ export default function NegotiationDetailPage() {
   const [proposalsRefreshError, setProposalsRefreshError] = useState<
     string | null
   >(null);
+  const [proposalDeletingId, setProposalDeletingId] = useState<string | null>(
+    null
+  );
+  const [proposalDeleteError, setProposalDeleteError] = useState<string | null>(
+    null
+  );
+  const [mockHiddenProposalIds, setMockHiddenProposalIds] = useState<
+    Set<string>
+  >(() => new Set());
+
+  const proposalsVisible = useMemo(
+    () => proposals.filter((p) => !mockHiddenProposalIds.has(p.id)),
+    [proposals, mockHiddenProposalIds]
+  );
+
+  useEffect(() => {
+    setMockHiddenProposalIds(new Set());
+  }, [id]);
 
   const loadSessions = useCallback(async (): Promise<{
     error: string | null;
@@ -460,6 +486,48 @@ export default function NegotiationDetailPage() {
     setProposals(rows);
     return { error: null, rows };
   }, [id]);
+
+  const handleDeleteDraftProposalFromTab = useCallback(
+    async (p: ProposalItemVM) => {
+      if (p.status !== "draft") return;
+      if (
+        !confirm(
+          `Delete draft proposal “${p.title}”? This cannot be undone. Session links and proposal references on notes or files will be cleared.`
+        )
+      ) {
+        return;
+      }
+      setProposalDeleteError(null);
+      if (!isSupabaseConfigured()) {
+        setMockHiddenProposalIds((prev) => new Set([...prev, p.id]));
+        return;
+      }
+      setProposalDeletingId(p.id);
+      try {
+        const supabase = createSupabaseClient();
+        const result = await deleteDraftProposalForNegotiation(
+          supabase,
+          p.id,
+          id
+        );
+        if (!result.ok) {
+          setProposalDeleteError(result.error);
+          return;
+        }
+        const refresh = await loadProposals();
+        if (refresh.error) {
+          setProposalsRefreshError(
+            `The proposal was deleted, but the list could not be refreshed. Try reloading. Details: ${refresh.error}`
+          );
+        } else {
+          setProposalsRefreshError(null);
+        }
+      } finally {
+        setProposalDeletingId(null);
+      }
+    },
+    [id, loadProposals]
+  );
 
   useEffect(() => {
     const applyHashTab = () => {
@@ -1135,11 +1203,17 @@ export default function NegotiationDetailPage() {
               </Card>
             ) : null}
 
-            {proposals.length === 0 ? (
+            {proposalDeleteError ? (
+              <Card className="mb-4 border-red-200 bg-red-50/80">
+                <p className="text-sm text-red-800/95">{proposalDeleteError}</p>
+              </Card>
+            ) : null}
+
+            {proposalsVisible.length === 0 ? (
               <EmptySectionCard message="No proposals for this negotiation yet." />
             ) : (
               <div className="space-y-4">
-                {proposals.map((p) => (
+                {proposalsVisible.map((p) => (
                   <Card key={p.id}>
                     <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
                       <div>
@@ -1150,9 +1224,31 @@ export default function NegotiationDetailPage() {
                           {p.category}
                         </p>
                       </div>
-                      <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                        {formatStatus(p.status)}
-                      </span>
+                      <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
+                        <span className="self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 sm:self-end">
+                          {formatStatus(p.status)}
+                        </span>
+                        {p.status === "draft" ? (
+                          <button
+                            type="button"
+                            disabled={
+                              isSupabaseConfigured() &&
+                              proposalDeletingId === p.id
+                            }
+                            onClick={() =>
+                              void handleDeleteDraftProposalFromTab(p)
+                            }
+                            className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-800 shadow-sm transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            {isSupabaseConfigured() &&
+                            proposalDeletingId === p.id
+                              ? "Deleting…"
+                              : !isSupabaseConfigured()
+                                ? "Delete draft (mock)"
+                                : "Delete draft"}
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
                     <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
                       <div>
@@ -1660,7 +1756,7 @@ export default function NegotiationDetailPage() {
       ) : null}
 
       <ProposalSaveTracePanel
-        rows={proposals.map((p) => ({
+        rows={proposalsVisible.map((p) => ({
           id: p.id,
           bodyHtml: p.body_html,
           title: p.title,

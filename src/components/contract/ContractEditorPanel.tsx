@@ -1,11 +1,11 @@
 "use client";
 
 import { EditorContent, useEditor, useEditorState } from "@tiptap/react";
-import StarterKit from "@tiptap/starter-kit";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Editor } from "@tiptap/core";
+import { TipTapTablePopover } from "@/components/tiptap/TipTapTablePopover";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getNegotiationById } from "@/data/mock";
@@ -17,6 +17,7 @@ import {
 } from "@/lib/contract-compare";
 import {
   findNewestAligningDraftProposalId,
+  markSectionRowsWhenProposalDraftDrifts,
   matchChangedRowsToSavedProposals,
   proposalSaveGroupKey,
   titlesAlignForProposal,
@@ -30,6 +31,7 @@ import {
   writeProposalSaveTrace,
   type ProposalSaveTraceV1,
 } from "@/lib/proposal-save-trace";
+import { contractEditorTipTapExtensions } from "@/lib/tiptap-contract-editor-extensions";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
@@ -371,15 +373,6 @@ function ContractCompareView({
   onAfterProposalsSaved?: () => Promise<void>;
 }) {
   const router = useRouter();
-  const rows = useMemo(
-    () => buildSectionDiffRows(baselineHtml, workingDraftHtml),
-    [baselineHtml, workingDraftHtml]
-  );
-  const totals = useMemo(() => sumChangeTotals(rows), [rows]);
-  const changedRows = useMemo(
-    () => rows.filter((r) => r.hasChange),
-    [rows]
-  );
 
   const [savedProposalsForReconcile, setSavedProposalsForReconcile] = useState<
     SavedProposalForReconcile[]
@@ -420,6 +413,31 @@ function ContractCompareView({
     if (typeof document === "undefined") return raw;
     return wrapDiffAdditionsInProposalBodyHtml(raw, row.parts);
   }, []);
+
+  const rowsBase = useMemo(
+    () => buildSectionDiffRows(baselineHtml, workingDraftHtml),
+    [baselineHtml, workingDraftHtml]
+  );
+
+  const rows = useMemo(() => {
+    if (!showProposalReview) return rowsBase;
+    return markSectionRowsWhenProposalDraftDrifts(
+      rowsBase,
+      savedProposalsForReconcile,
+      getCanonicalRowBody
+    );
+  }, [
+    rowsBase,
+    showProposalReview,
+    savedProposalsForReconcile,
+    getCanonicalRowBody,
+  ]);
+
+  const totals = useMemo(() => sumChangeTotals(rows), [rows]);
+  const changedRows = useMemo(
+    () => rows.filter((r) => r.hasChange),
+    [rows]
+  );
 
   const diffRowToSavedProposal = useMemo(
     () =>
@@ -1260,6 +1278,7 @@ function Toolbar({ editor }: { editor: Editor }) {
     orderedAlpha,
     orderedRoman,
     blockquote,
+    inTable,
   } = useEditorState({
     editor,
     selector: (snap) => {
@@ -1276,6 +1295,7 @@ function Toolbar({ editor }: { editor: Editor }) {
           orderedAlpha: false,
           orderedRoman: false,
           blockquote: false,
+          inTable: false,
         };
       }
       const olType = ed.getAttributes("orderedList").type as
@@ -1300,6 +1320,7 @@ function Toolbar({ editor }: { editor: Editor }) {
         orderedAlpha: inOl && olType === "a",
         orderedRoman: inOl && olType === "i",
         blockquote: ed.isActive("blockquote"),
+        inTable: ed.isActive("table"),
       };
     },
   });
@@ -1454,6 +1475,17 @@ function Toolbar({ editor }: { editor: Editor }) {
       >
         Rule
       </button>
+
+      <div
+        className="mx-0.5 hidden h-6 w-px shrink-0 bg-slate-200 sm:block"
+        aria-hidden
+      />
+
+      <TipTapTablePopover
+        editor={editor}
+        inTable={inTable}
+        variant="contract"
+      />
     </div>
   );
 }
@@ -1644,7 +1676,7 @@ export function ContractEditorPanel({
   }, [loadData]);
 
   const editor = useEditor({
-    extensions: [StarterKit],
+    extensions: contractEditorTipTapExtensions,
     content: "<p></p>",
     immediatelyRender: false,
     editorProps: {

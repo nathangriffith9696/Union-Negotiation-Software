@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { SectionDiffRow } from "./contract-compare";
 import {
   findNewestAligningDraftProposalId,
+  markSectionRowsWhenProposalDraftDrifts,
   matchChangedRowsToSavedProposals,
   proposalSaveGroupKey,
   type SavedProposalForReconcile,
@@ -209,6 +210,90 @@ function diffRow(
     newBodyHtml,
   };
 }
+
+/** Same shape as buildSectionDiffRows when baseline plain === working plain (no redline). */
+function stableDiffRow(
+  index: number,
+  headingLabel: string,
+  newBodyHtml: string,
+  parts: Change[] = []
+): SectionDiffRow {
+  return {
+    index,
+    headingLabel,
+    parts,
+    addedWords: 0,
+    removedWords: 0,
+    addedChars: 0,
+    removedChars: 0,
+    hasChange: false,
+    newBodyHtml,
+  };
+}
+
+describe("markSectionRowsWhenProposalDraftDrifts", () => {
+  const canon = (r: SectionDiffRow) => r.newBodyHtml.trim();
+
+  it("forces hasChange when snapshot-plain matches but draft body still has extra markup/text", () => {
+    const rows = [
+      stableDiffRow(0, "Article 2 — Scope", "<p>scope only</p>"),
+    ];
+    const saved: SavedProposalForReconcile[] = [
+      row({
+        id: "d1",
+        title: "Article 2 — Scope",
+        body_html: "<p>scope only</p><p>still in draft</p>",
+        created_at: "2025-01-01T00:00:00Z",
+      }),
+    ];
+    const out = markSectionRowsWhenProposalDraftDrifts(rows, saved, canon);
+    expect(out[0]!.hasChange).toBe(true);
+  });
+
+  it("leaves rows unchanged when merged canon matches the newest aligning draft", () => {
+    const rows = [
+      stableDiffRow(0, "Article 2", "<p>in sync</p>"),
+    ];
+    const saved: SavedProposalForReconcile[] = [
+      row({
+        id: "d1",
+        title: "Article 2",
+        body_html: "<p>in sync</p>",
+        created_at: "2025-01-01T00:00:00Z",
+      }),
+    ];
+    const out = markSectionRowsWhenProposalDraftDrifts(rows, saved, canon);
+    expect(out).toBe(rows);
+    expect(out[0]!.hasChange).toBe(false);
+  });
+
+  it("returns the same array when there are no saved proposals", () => {
+    const rows = [stableDiffRow(0, "Article 1", "<p>x</p>")];
+    const out = markSectionRowsWhenProposalDraftDrifts(rows, [], canon);
+    expect(out).toBe(rows);
+  });
+
+  it("marks every row in the same article group when merged canon ≠ draft", () => {
+    const rows = [
+      stableDiffRow(0, "Article 1 — Alpha", "<p>x</p>"),
+      stableDiffRow(1, "Article 1 — Beta", "<p>y</p>"),
+    ];
+    const saved: SavedProposalForReconcile[] = [
+      row({
+        id: "merged",
+        title: "Article 1 — Alpha",
+        body_html: "<p>x</p><p>y</p><p>extra</p>",
+        created_at: "2025-01-01T00:00:00Z",
+      }),
+    ];
+    expect(proposalSaveGroupKey(rows[0]!.headingLabel)).toBe(
+      proposalSaveGroupKey(rows[1]!.headingLabel)
+    );
+    const out = markSectionRowsWhenProposalDraftDrifts(rows, saved, canon);
+    expect(out[0]!.hasChange).toBe(true);
+    expect(out[1]!.hasChange).toBe(true);
+  });
+});
 
 describe("proposalSaveGroupKey", () => {
   it("uses article number when heading parses as Article N", () => {

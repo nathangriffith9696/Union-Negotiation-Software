@@ -198,6 +198,47 @@ body {
   list-style-type: lower-roman;
 }
 
+.contract-editor-rich-preview .tableWrapper {
+  margin: 0.65em 0;
+  overflow-x: auto;
+}
+
+.contract-editor-rich-preview table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.65em 0;
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+
+.contract-editor-rich-preview th,
+.contract-editor-rich-preview td {
+  border: 1px solid #cbd5e1;
+  padding: 0.35rem 0.5rem;
+  vertical-align: top;
+  text-align: left;
+}
+
+.contract-editor-rich-preview th {
+  background: #f1f5f9;
+  font-weight: 600;
+}
+
+.contract-editor-rich-preview td p,
+.contract-editor-rich-preview th p {
+  margin: 0.2em 0;
+}
+
+.contract-editor-rich-preview td p:first-child,
+.contract-editor-rich-preview th p:first-child {
+  margin-top: 0;
+}
+
+.contract-editor-rich-preview td p:last-child,
+.contract-editor-rich-preview th p:last-child {
+  margin-bottom: 0;
+}
+
 .contract-editor-rich-preview s,
 .contract-editor-rich-preview strike,
 .contract-editor-rich-preview del {
@@ -254,6 +295,49 @@ body {
   background: #f1f5f9;
   padding: 0.125em 0.35em;
   border-radius: 0.25rem;
+}
+
+/* Tables — wage scales, holiday lists, etc. */
+.negotiation-contract-editor .ProseMirror .tableWrapper {
+  margin: 0.65em 0;
+  overflow-x: auto;
+}
+
+.negotiation-contract-editor .ProseMirror table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.65em 0;
+  font-size: 0.9em;
+  line-height: 1.45;
+}
+
+.negotiation-contract-editor .ProseMirror th,
+.negotiation-contract-editor .ProseMirror td {
+  border: 1px solid #cbd5e1;
+  padding: 0.35rem 0.5rem;
+  vertical-align: top;
+  text-align: left;
+}
+
+.negotiation-contract-editor .ProseMirror th {
+  background: #f1f5f9;
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.negotiation-contract-editor .ProseMirror td p,
+.negotiation-contract-editor .ProseMirror th p {
+  margin: 0.2em 0;
+}
+
+.negotiation-contract-editor .ProseMirror td p:first-child,
+.negotiation-contract-editor .ProseMirror th p:first-child {
+  margin-top: 0;
+}
+
+.negotiation-contract-editor .ProseMirror td p:last-child,
+.negotiation-contract-editor .ProseMirror th p:last-child {
+  margin-bottom: 0;
 }
 
 /* New proposal modal — TipTap (same list/strike behavior as contract editor, compact) */
@@ -348,6 +432,47 @@ body {
   margin: 0.65em 0;
   border: none;
   border-top: 1px solid #e2e8f0;
+}
+
+.proposal-modal-body-editor.ProseMirror .tableWrapper {
+  margin: 0.5em 0;
+  overflow-x: auto;
+}
+
+.proposal-modal-body-editor.ProseMirror table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.875em;
+  line-height: 1.45;
+}
+
+.proposal-modal-body-editor.ProseMirror th,
+.proposal-modal-body-editor.ProseMirror td {
+  border: 1px solid #cbd5e1;
+  padding: 0.3rem 0.45rem;
+  vertical-align: top;
+  text-align: left;
+}
+
+.proposal-modal-body-editor.ProseMirror th {
+  background: #f1f5f9;
+  font-weight: 600;
+}
+
+.proposal-modal-body-editor.ProseMirror td p,
+.proposal-modal-body-editor.ProseMirror th p {
+  margin: 0.15em 0;
+}
+
+.proposal-modal-body-editor.ProseMirror td p:first-child,
+.proposal-modal-body-editor.ProseMirror th p:first-child {
+  margin-top: 0;
+}
+
+.proposal-modal-body-editor.ProseMirror td p:last-child,
+.proposal-modal-body-editor.ProseMirror th p:last-child {
+  margin-bottom: 0;
 }
 
 /* Proposals print / bargaining packet (contract-style, not dashboard cards) */
@@ -555,6 +680,39 @@ body {
 
   #proposals-print-document .packet-article-prose--rich li p {
     margin: 0.15em 0;
+  }
+
+  #proposals-print-document .packet-article-prose--rich .tableWrapper {
+    margin: 0.5em 0;
+    overflow: visible;
+  }
+
+  #proposals-print-document .packet-article-prose--rich table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.5em 0;
+    font-size: 9.5pt;
+    line-height: 1.35;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  #proposals-print-document .packet-article-prose--rich th,
+  #proposals-print-document .packet-article-prose--rich td {
+    border: 0.5pt solid #333;
+    padding: 0.25em 0.4em;
+    vertical-align: top;
+    text-align: left;
+  }
+
+  #proposals-print-document .packet-article-prose--rich th {
+    background: #eee;
+    font-weight: 700;
+  }
+
+  #proposals-print-document .packet-article-prose--rich td p,
+  #proposals-print-document .packet-article-prose--rich th p {
+    margin: 0.1em 0;
   }
 
   #proposals-print-document .packet-article-prose--rich strong,

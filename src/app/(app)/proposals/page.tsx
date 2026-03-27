@@ -24,6 +24,7 @@ import { formatDate, formatStatus } from "@/lib/format";
 import { sortProposalsBargainingOrder } from "@/lib/proposal-article-sort";
 import { isLikelyNegotiationUuid } from "@/lib/negotiation-id";
 import { labelsFromNegotiationsRelation } from "@/lib/supabase-embeds";
+import { deleteDraftProposalForNegotiation } from "@/lib/proposal-delete";
 import {
   createSupabaseClient,
   isSupabaseConfigured,
@@ -32,6 +33,7 @@ import type { ProposalStatus, ProposingParty } from "@/types/database";
 
 type ProposalCardVM = {
   id: string;
+  negotiationId: string;
   title: string;
   category: string;
   status: ProposalStatus;
@@ -49,6 +51,7 @@ type ProposalCardVM = {
 
 type ProposalWithRelationsRow = {
   id: string;
+  negotiation_id: string;
   title: string;
   category: string;
   status: ProposalStatus;
@@ -93,6 +96,7 @@ function buildMockRows(negotiationId: string | null): ProposalCardVM[] {
 
     return {
       id: p.id,
+      negotiationId: p.negotiationId,
       title: p.title,
       category: p.category,
       status: p.status,
@@ -114,6 +118,7 @@ function mapSupabaseRow(row: ProposalWithRelationsRow): ProposalCardVM {
   const chain = labelsFromNegotiationsRelation(row.negotiations);
   return {
     id: row.id,
+    negotiationId: row.negotiation_id,
     title: row.title,
     category: row.category,
     status: row.status,
@@ -150,6 +155,16 @@ function ProposalsPageContent() {
     new Date().toISOString()
   );
   const printRafRef = useRef<number | null>(null);
+  const [listRefreshKey, setListRefreshKey] = useState(0);
+  const [mockDeletedProposalIds, setMockDeletedProposalIds] = useState<
+    Set<string>
+  >(() => new Set());
+  const [proposalDeletingId, setProposalDeletingId] = useState<string | null>(
+    null
+  );
+  const [proposalDeleteError, setProposalDeleteError] = useState<string | null>(
+    null
+  );
 
   function handlePrintProposals() {
     setPrintGeneratedAtIso(new Date().toISOString());
@@ -164,8 +179,11 @@ function ProposalsPageContent() {
 
   useEffect(() => {
     if (!isSupabaseConfigured()) {
-      setRows(buildMockRows(negotiationScope));
-      setStatus("ready");
+      const built = buildMockRows(negotiationScope).filter(
+        (p) => !mockDeletedProposalIds.has(p.id)
+      );
+      setRows(built);
+      setStatus(built.length === 0 ? "empty" : "ready");
       setErrorMessage(null);
       return;
     }
@@ -182,6 +200,7 @@ function ProposalsPageContent() {
           .select(
             `
             id,
+            negotiation_id,
             title,
             category,
             status,
@@ -238,7 +257,40 @@ function ProposalsPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [negotiationScope, scopeIsUuid]);
+  }, [negotiationScope, scopeIsUuid, listRefreshKey, mockDeletedProposalIds]);
+
+  async function handleDeleteDraftProposal(p: ProposalCardVM) {
+    if (p.status !== "draft") return;
+    if (
+      !confirm(
+        `Delete draft proposal “${p.title}”? This cannot be undone. Session links and proposal references on notes or files will be cleared.`
+      )
+    ) {
+      return;
+    }
+    setProposalDeleteError(null);
+    if (!isSupabaseConfigured()) {
+      setMockDeletedProposalIds((prev) => new Set([...prev, p.id]));
+      setListRefreshKey((k) => k + 1);
+      return;
+    }
+    setProposalDeletingId(p.id);
+    try {
+      const supabase = createSupabaseClient();
+      const result = await deleteDraftProposalForNegotiation(
+        supabase,
+        p.id,
+        p.negotiationId
+      );
+      if (!result.ok) {
+        setProposalDeleteError(result.error);
+        return;
+      }
+      setListRefreshKey((k) => k + 1);
+    } finally {
+      setProposalDeletingId(null);
+    }
+  }
 
   const scopedDescription =
     negotiationScope != null
@@ -273,6 +325,12 @@ function ProposalsPageContent() {
 
         {status === "error" && errorMessage ? (
           <ListErrorCard noun="proposals" message={errorMessage} />
+        ) : null}
+
+        {proposalDeleteError ? (
+          <Card className="mb-4 border-red-200 bg-red-50/80 print:hidden">
+            <p className="text-sm text-red-800/95">{proposalDeleteError}</p>
+          </Card>
         ) : null}
 
         {status === "empty" ? (
@@ -320,9 +378,21 @@ function ProposalsPageContent() {
                       {p.districtName}
                     </p>
                   </div>
-                  <span className="shrink-0 self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700">
-                    {formatStatus(p.status)}
-                  </span>
+                  <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
+                    <span className="self-start rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 sm:self-end">
+                      {formatStatus(p.status)}
+                    </span>
+                    {p.status === "draft" ? (
+                      <button
+                        type="button"
+                        disabled={proposalDeletingId === p.id}
+                        onClick={() => void handleDeleteDraftProposal(p)}
+                        className="rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-semibold text-red-800 shadow-sm transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {proposalDeletingId === p.id ? "Deleting…" : "Delete draft"}
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
                 <div className="mt-5 border-t border-slate-100 pt-4">
                   <dl className="grid gap-3 text-sm sm:grid-cols-2">

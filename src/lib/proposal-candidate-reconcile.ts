@@ -167,6 +167,61 @@ export function matchChangedRowsToSavedProposals(
 }
 
 /**
+ * When working copy matches the snapshot in strike-stripped plain text (so {@link buildSectionDiffRows}
+ * yields `hasChange: false`) but the **newest aligning draft** `body_html` still reflects older
+ * markup or wording, force `hasChange: true` on every row in that proposal group so draft review
+ * stays actionable (un-strike, delete reverted additions, etc.).
+ */
+export function markSectionRowsWhenProposalDraftDrifts(
+  rows: SectionDiffRow[],
+  saved: SavedProposalForReconcile[],
+  getCanonicalRowBody: (row: SectionDiffRow) => string
+): SectionDiffRow[] {
+  if (rows.length === 0 || saved.length === 0) return rows;
+
+  const savedById = new Map(saved.map((p) => [p.id, p] as const));
+
+  const byGroup = new Map<string, SectionDiffRow[]>();
+  for (const row of rows) {
+    const k = proposalSaveGroupKey(row.headingLabel);
+    const g = byGroup.get(k);
+    if (g) g.push(row);
+    else byGroup.set(k, [row]);
+  }
+
+  const driftIndices = new Set<number>();
+
+  for (const groupRows of byGroup.values()) {
+    groupRows.sort((a, b) => a.index - b.index);
+    const primary = groupRows[0]!;
+    const draftId = findNewestAligningDraftProposalId(
+      primary.headingLabel,
+      saved
+    );
+    if (!draftId) continue;
+
+    const p = savedById.get(draftId);
+    if (!p || p.status !== "draft") continue;
+
+    const mergedCanon = mergedCanonicalBodyForProposalGroup(
+      groupRows,
+      getCanonicalRowBody
+    );
+    if (bodiesMatch(mergedCanon, p.body_html)) continue;
+
+    for (const r of groupRows) {
+      driftIndices.add(r.index);
+    }
+  }
+
+  if (driftIndices.size === 0) return rows;
+
+  return rows.map((r) =>
+    driftIndices.has(r.index) ? { ...r, hasChange: true } : r
+  );
+}
+
+/**
  * Draft-review save path: find an existing **draft** to update for this section (not body
  * equality). Prefers matching by extracted article number when both sides have one; otherwise
  * {@link titlesAlignForProposal}. `saved` should be negotiation-scoped and ordered by

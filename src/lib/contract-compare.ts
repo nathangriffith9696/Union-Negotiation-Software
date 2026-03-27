@@ -44,7 +44,8 @@ function getContractEditorTopLevelElementsFromWrap(wrap: HTMLElement): HTMLEleme
         t === "ol" ||
         t === "blockquote" ||
         t === "pre" ||
-        t === "hr"
+        t === "hr" ||
+        t === "table"
       );
     });
     if (looksLikeBlocks && inner.length > 0) {
