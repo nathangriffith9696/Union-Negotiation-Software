@@ -1,7 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import {
+  createSupabaseClient,
+  isSupabaseConfigured,
+} from "@/lib/supabase";
 
 function IconDashboard({ className }: { className?: string }) {
   return (
@@ -212,6 +216,16 @@ const nav = [
 
 export function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const authEnabled = isSupabaseConfigured();
+
+  async function handleSignOut() {
+    if (!authEnabled) return;
+    const supabase = createSupabaseClient();
+    await supabase.auth.signOut();
+    router.push("/login");
+    router.refresh();
+  }
 
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-slate-800 bg-sidebar text-slate-100 print:hidden">
@@ -251,7 +265,17 @@ export function Sidebar() {
         })}
       </nav>
       <div className="border-t border-slate-800 p-4 text-xs text-slate-500">
-        Mock data · Internal use
+        {authEnabled ? (
+          <button
+            type="button"
+            onClick={() => void handleSignOut()}
+            className="w-full rounded-lg border border-slate-600 bg-slate-800/50 px-3 py-2 text-left text-sm font-medium text-slate-200 transition-colors hover:bg-slate-700/80 hover:text-white"
+          >
+            Sign out
+          </button>
+        ) : (
+          <p>Mock data · Internal use</p>
+        )}
       </div>
     </aside>
   );
