@@ -210,7 +210,33 @@ export type MasterContractRow = {
   file_name: string | null;
   created_at: string;
   created_by: string | null;
+  /** Set when the row was created from the docx import pipeline (optional for legacy txt uploads). */
+  import_metadata: Record<string, unknown> | null;
 };
+
+/** Staging row: analyze stores canonical HTML; commit copies to `master_contracts` unchanged. */
+export type MasterContractImportStagingRow = {
+  id: string;
+  local_id: string;
+  body_html: string;
+  body_text: string;
+  original_filename: string;
+  uploaded_by: string;
+  import_mode: string;
+  validation_result: Record<string, unknown>;
+  created_at: string;
+  expires_at: string;
+};
+
+export type MasterContractImportStagingInsert = Omit<
+  MasterContractImportStagingRow,
+  "id" | "created_at"
+> &
+  Partial<Pick<MasterContractImportStagingRow, "id" | "created_at">>;
+
+export type MasterContractImportStagingUpdate = Partial<
+  Omit<MasterContractImportStagingRow, "id" | "created_at">
+>;
 
 /** Insert payloads (omit DB defaults where optional). */
 export type DistrictInsert = Omit<DistrictRow, "id" | "created_at"> &
@@ -288,13 +314,21 @@ export type NegotiationContractDraftInsert = Omit<
 
 export type MasterContractInsert = Omit<
   MasterContractRow,
-  "id" | "created_at" | "created_by"
+  "id" | "created_at" | "created_by" | "import_metadata"
 > &
-  Partial<Pick<MasterContractRow, "id" | "created_at" | "created_by">>;
+  Partial<
+    Pick<
+      MasterContractRow,
+      "id" | "created_at" | "created_by" | "import_metadata"
+    >
+  >;
 
 /** RLS should deny updates in production; type kept for Supabase client inference. */
 export type MasterContractUpdate = Partial<
-  Pick<MasterContractRow, "file_name" | "body_text" | "body_html">
+  Pick<
+    MasterContractRow,
+    "file_name" | "body_text" | "body_html" | "import_metadata"
+  >
 >;
 
 export type NegotiationContractDraftUpdate = Partial<
@@ -433,6 +467,12 @@ export type UnionNegotiationDatabase = {
         Row: MasterContractRow;
         Insert: MasterContractInsert;
         Update: MasterContractUpdate;
+        Relationships: [];
+      };
+      master_contract_import_staging: {
+        Row: MasterContractImportStagingRow;
+        Insert: MasterContractImportStagingInsert;
+        Update: MasterContractImportStagingUpdate;
         Relationships: [];
       };
     };

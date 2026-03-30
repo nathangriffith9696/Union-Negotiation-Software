@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { requireSuperAdmin } from "@/lib/auth/require-super-admin";
 import { contractTextToHtml } from "@/lib/master-contract-html";
+import { getNextMasterContractVersionNumber } from "@/lib/master-contract-version";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 export async function POST(request: Request) {
@@ -49,19 +50,11 @@ export async function POST(request: Request) {
   const supabase = await createSupabaseServerClient();
   const body_html = contractTextToHtml(bodyText);
 
-  const { data: last, error: verErr } = await supabase
-    .from("master_contracts")
-    .select("version_number")
-    .eq("local_id", localId)
-    .order("version_number", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  if (verErr) {
-    return NextResponse.json({ error: verErr.message }, { status: 400 });
+  const nextVer = await getNextMasterContractVersionNumber(supabase, localId);
+  if (!nextVer.ok) {
+    return NextResponse.json({ error: nextVer.message }, { status: 400 });
   }
-
-  const version_number = (last?.version_number ?? 0) + 1;
+  const version_number = nextVer.versionNumber;
 
   const { data: inserted, error: insErr } = await supabase
     .from("master_contracts")

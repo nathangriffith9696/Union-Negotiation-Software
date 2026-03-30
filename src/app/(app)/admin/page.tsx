@@ -58,6 +58,18 @@ export default function AdminPage() {
   const [localListErr, setLocalListErr] = useState<string | null>(null);
   const [masterListKey, setMasterListKey] = useState(0);
 
+  const [docxFile, setDocxFile] = useState<File | null>(null);
+  const [docxStagingId, setDocxStagingId] = useState<string | null>(null);
+  const [docxPreviewHtml, setDocxPreviewHtml] = useState<string | null>(null);
+  const [docxValidation, setDocxValidation] = useState<{
+    warnings?: { code: string; message: string }[];
+    stats?: Record<string, number>;
+  } | null>(null);
+  const [docxAnalyzing, setDocxAnalyzing] = useState(false);
+  const [docxCommitting, setDocxCommitting] = useState(false);
+  const [docxErr, setDocxErr] = useState<string | null>(null);
+  const [docxMsg, setDocxMsg] = useState<string | null>(null);
+
   useEffect(() => {
     if (!supabaseOn) {
       setRoleLoading(false);
@@ -184,6 +196,115 @@ export default function AdminPage() {
     } finally {
       setUploading(false);
     }
+  }
+
+  function resetDocxStaging() {
+    setDocxStagingId(null);
+    setDocxPreviewHtml(null);
+    setDocxValidation(null);
+    setDocxErr(null);
+    setDocxMsg(null);
+  }
+
+  async function submitDocxAnalyze(e: React.FormEvent) {
+    e.preventDefault();
+    setDocxErr(null);
+    setDocxMsg(null);
+    setDocxPreviewHtml(null);
+    setDocxStagingId(null);
+    setDocxValidation(null);
+    if (!docxFile) {
+      setDocxErr("Choose a .docx file.");
+      return;
+    }
+    if (!localId) {
+      setDocxErr("Select a local.");
+      return;
+    }
+    setDocxAnalyzing(true);
+    try {
+      const fd = new FormData();
+      fd.append("localId", localId);
+      fd.append("file", docxFile);
+      const res = await fetch("/api/admin/master-contract/import/analyze", {
+        method: "POST",
+        body: fd,
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        validation?: {
+          warnings?: { code: string; message: string }[];
+          stats?: Record<string, number>;
+        };
+        stagingId?: string;
+        previewHtml?: string;
+      };
+      if (!res.ok) {
+        setDocxErr(json.error ?? "Analyze failed.");
+        if (json.validation) {
+          setDocxValidation(json.validation);
+        }
+        return;
+      }
+      setDocxStagingId(json.stagingId ?? null);
+      setDocxPreviewHtml(json.previewHtml ?? null);
+      setDocxValidation(json.validation ?? null);
+      setDocxMsg("Review the preview below, then commit or cancel.");
+    } catch (err) {
+      setDocxErr(err instanceof Error ? err.message : "Analyze failed.");
+    } finally {
+      setDocxAnalyzing(false);
+    }
+  }
+
+  async function commitDocxImport() {
+    if (!docxStagingId) return;
+    setDocxErr(null);
+    setDocxMsg(null);
+    setDocxCommitting(true);
+    try {
+      const res = await fetch("/api/admin/master-contract/import/commit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stagingId: docxStagingId }),
+      });
+      const json = (await res.json()) as {
+        error?: string;
+        versionNumber?: number;
+      };
+      if (!res.ok) {
+        setDocxErr(json.error ?? "Commit failed.");
+        return;
+      }
+      setDocxFile(null);
+      setDocxStagingId(null);
+      setDocxPreviewHtml(null);
+      setDocxValidation(null);
+      setDocxErr(null);
+      setDocxMsg(`Saved as version ${json.versionNumber ?? "?"}.`);
+      setMasterListKey((k) => k + 1);
+    } catch (err) {
+      setDocxErr(err instanceof Error ? err.message : "Commit failed.");
+    } finally {
+      setDocxCommitting(false);
+    }
+  }
+
+  async function cancelDocxStaging() {
+    if (!docxStagingId) {
+      resetDocxStaging();
+      return;
+    }
+    setDocxErr(null);
+    try {
+      await fetch(`/api/admin/master-contract/import/${docxStagingId}`, {
+        method: "DELETE",
+      });
+    } catch {
+      /* ignore */
+    }
+    setDocxFile(null);
+    resetDocxStaging();
   }
 
   async function submitInvite(e: React.FormEvent) {
@@ -342,6 +463,118 @@ export default function AdminPage() {
               {uploading ? "Uploading…" : "Upload and save version"}
             </button>
           </form>
+        </Card>
+
+        <Card>
+          <h2 className="text-base font-semibold text-slate-900">
+            Master contract (.docx)
+          </h2>
+          <p className="mt-2 text-sm text-slate-600">
+            Word documents must use built-in Heading 1–3 styles. The import is
+            strict: analyze validates structure, then you commit the exact
+            preview HTML.
+          </p>
+          <form
+            className="mt-6 space-y-4"
+            onSubmit={(e) => void submitDocxAnalyze(e)}
+          >
+            <div>
+              <label
+                htmlFor="admin-docx-local"
+                className="block text-sm font-medium text-slate-700"
+              >
+                Local
+              </label>
+              <select
+                id="admin-docx-local"
+                value={localId}
+                onChange={(e) => setLocalId(e.target.value)}
+                className="mt-1 w-full max-w-md rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-300"
+              >
+                {locals.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label
+                htmlFor="admin-docx"
+                className="block text-sm font-medium text-slate-700"
+              >
+                Word file
+              </label>
+              <input
+                id="admin-docx"
+                type="file"
+                accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                className="mt-1 block w-full max-w-md text-sm text-slate-600 file:mr-3 file:rounded-md file:border file:border-slate-200 file:bg-slate-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-slate-800"
+                onChange={(e) => {
+                  setDocxFile(e.target.files?.[0] ?? null);
+                  resetDocxStaging();
+                }}
+              />
+            </div>
+            {docxErr ? (
+              <p className="text-sm text-red-600" role="alert">
+                {docxErr}
+              </p>
+            ) : null}
+            {docxMsg ? (
+              <p className="text-sm text-emerald-700" role="status">
+                {docxMsg}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="submit"
+                disabled={docxAnalyzing}
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {docxAnalyzing ? "Analyzing…" : "Analyze"}
+              </button>
+              {docxStagingId && docxPreviewHtml ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={docxCommitting}
+                    onClick={() => void commitDocxImport()}
+                    className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-900 shadow-sm transition-colors hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {docxCommitting ? "Saving…" : "Commit version"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={docxCommitting}
+                    onClick={() => void cancelDocxStaging()}
+                    className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </form>
+          {docxValidation?.warnings && docxValidation.warnings.length > 0 ? (
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-sm text-amber-950">
+              <p className="font-medium">Warnings</p>
+              <ul className="mt-1 list-inside list-disc">
+                {docxValidation.warnings.map((w) => (
+                  <li key={w.code}>{w.message}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          {docxPreviewHtml ? (
+            <div className="mt-6">
+              <p className="text-sm font-medium text-slate-800">Preview</p>
+              <div
+                className="contract-editor-rich-preview mt-2 max-h-[min(70vh,32rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-900 [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:border-slate-300 [&_blockquote]:pl-3 [&_blockquote]:text-slate-600 [&_h1]:mt-4 [&_h1]:text-xl [&_h1]:font-semibold [&_h2]:mt-3 [&_h2]:text-lg [&_h2]:font-semibold [&_h3]:mt-2 [&_h3]:text-base [&_h3]:font-semibold [&_p]:my-2 [&_li]:my-1"
+                dangerouslySetInnerHTML={{ __html: docxPreviewHtml }}
+              />
+            </div>
+          ) : null}
         </Card>
 
         <Card>
