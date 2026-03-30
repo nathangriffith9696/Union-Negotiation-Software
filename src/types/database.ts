@@ -98,6 +98,8 @@ export type BargainingUnitRow = {
 export type NegotiationRow = {
   id: string;
   bargaining_unit_id: string;
+  /** Frozen link to `master_contracts` for editor seed / restore-to-original. */
+  master_contract_id: string | null;
   title: string;
   status: NegotiationStatus;
   started_on: string | null;

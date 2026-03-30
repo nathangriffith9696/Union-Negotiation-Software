@@ -1496,6 +1496,12 @@ const MOCK_DEFAULT_HTML =
 const SUPABASE_DEFAULT_HTML =
   "<p>Start drafting your collective agreement language here. Format with headings and lists as you would in a word processor. <span class=\"font-medium\">Save draft</span> keeps your working copy; <span class=\"font-medium\">Create snapshot</span> records a formal version for rollback and baseline compare.</p>";
 
+function isUnseededDraft(html: string | null | undefined): boolean {
+  if (html == null) return true;
+  const t = html.trim();
+  return t === "" || t === SUPABASE_DEFAULT_HTML.trim();
+}
+
 export function ContractEditorPanel({
   negotiationId,
 }: {
@@ -1513,6 +1519,9 @@ export function ContractEditorPanel({
         latestVersionNumber: number | null;
         contentRevision: number;
         versions: ContractVersionItem[];
+        /** Row in `master_contracts` used for restore-to-original; null if none on file yet. */
+        masterContractId: string | null;
+        masterContractVersion: number | null;
       }
   >({ kind: "loading" });
 
@@ -1527,6 +1536,13 @@ export function ContractEditorPanel({
   /** `null` = use latest snapshot as draft-review baseline. */
   const [compareBaselineVersionNumber, setCompareBaselineVersionNumber] =
     useState<number | null>(null);
+  /**
+   * After "Restore to original", proposal review diffs against this HTML (the
+   * master text) instead of a snapshot — avoids treating "back to master" as
+   * massive deletions vs an old snapshot.
+   */
+  const [draftReviewBaselineOverrideHtml, setDraftReviewBaselineOverrideHtml] =
+    useState<string | null>(null);
   /** Two snapshot picks for history compare; diff uses min/max version as old→new. */
   const [historyPickA, setHistoryPickA] = useState<number | null>(null);
   const [historyPickB, setHistoryPickB] = useState<number | null>(null);
@@ -1536,6 +1552,7 @@ export function ContractEditorPanel({
 
   const [draftSaving, setDraftSaving] = useState(false);
   const [snapshotSaving, setSnapshotSaving] = useState(false);
+  const [restoreLoading, setRestoreLoading] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
   const [liveEditorHtml, setLiveEditorHtml] = useState("");
@@ -1553,6 +1570,7 @@ export function ContractEditorPanel({
     setHistoryPickA(null);
     setHistoryPickB(null);
     setLoadedIntoEditorVersion(null);
+    setDraftReviewBaselineOverrideHtml(null);
     lastAppliedRevision.current = -1;
 
     if (!negotiationId) {
@@ -1583,6 +1601,8 @@ export function ContractEditorPanel({
         latestVersionNumber: latest?.version_number ?? null,
         contentRevision: Date.now(),
         versions,
+        masterContractId: null,
+        masterContractVersion: null,
       });
       return;
     }
@@ -1592,7 +1612,7 @@ export function ContractEditorPanel({
       const [negRes, verRes, draftRes] = await Promise.all([
         supabase
           .from("negotiations")
-          .select("title")
+          .select("title, master_contract_id, bargaining_units ( local_id )")
           .eq("id", negotiationId)
           .maybeSingle(),
         supabase
@@ -1626,24 +1646,101 @@ export function ContractEditorPanel({
         return;
       }
 
+      const negRow = negRes.data as {
+        title: string;
+        master_contract_id: string | null;
+        bargaining_units:
+          | { local_id: string }
+          | { local_id: string }[]
+          | null;
+      };
+      const buRaw = negRow.bargaining_units;
+      const buOne = Array.isArray(buRaw) ? buRaw[0] : buRaw;
+      const localId = buOne?.local_id ?? null;
+
+      let latestMaster: {
+        id: string;
+        body_html: string;
+        version_number: number;
+      } | null = null;
+      if (localId) {
+        const { data: mRow, error: mErr } = await supabase
+          .from("master_contracts")
+          .select("id, body_html, version_number")
+          .eq("local_id", localId)
+          .order("version_number", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (mErr) {
+          setLoadState({ kind: "error", message: mErr.message });
+          return;
+        }
+        if (mRow) {
+          latestMaster = mRow as {
+            id: string;
+            body_html: string;
+            version_number: number;
+          };
+        }
+      }
+
+      let effectiveMasterId = negRow.master_contract_id;
+      if (!effectiveMasterId && latestMaster) {
+        const { error: linkErr } = await supabase
+          .from("negotiations")
+          .update({ master_contract_id: latestMaster.id } as never)
+          .eq("id", negotiationId)
+          .is("master_contract_id", null);
+        if (!linkErr) {
+          effectiveMasterId = latestMaster.id;
+        }
+      }
+
+      let masterContractVersion: number | null = null;
+      if (effectiveMasterId) {
+        if (latestMaster && latestMaster.id === effectiveMasterId) {
+          masterContractVersion = latestMaster.version_number;
+        } else {
+          const { data: mvRow } = await supabase
+            .from("master_contracts")
+            .select("version_number")
+            .eq("id", effectiveMasterId)
+            .maybeSingle();
+          masterContractVersion =
+            (mvRow as { version_number: number } | null)?.version_number ?? null;
+        }
+      }
+
       const versions = (verRes.data ?? []) as ContractVersionItem[];
       const latest = versions[0] ?? null;
       const draftRow = draftRes.data as
         | { body_html: string; updated_at: string }
         | null;
 
-      let html =
-        (draftRow?.body_html?.trim() ? draftRow.body_html : null) ??
-        latest?.body_html?.trim() ??
-        SUPABASE_DEFAULT_HTML;
-      let draftUpdatedAt: string | null = draftRow?.updated_at ?? null;
+      const draftHtml = draftRow?.body_html;
+      const draftIsReal = !isUnseededDraft(draftHtml);
 
-      if (!draftRow) {
+      let html: string;
+      if (draftIsReal) {
+        html = draftHtml!;
+      } else if (latest?.body_html?.trim()) {
+        html = latest.body_html;
+      } else if (latestMaster?.body_html) {
+        html = latestMaster.body_html;
+      } else {
+        html = SUPABASE_DEFAULT_HTML;
+      }
+
+      let draftUpdatedAt: string | null = draftRow?.updated_at ?? null;
+      const draftNeedsPersist =
+        !draftRow || (draftRow.body_html ?? "") !== html;
+      if (draftNeedsPersist) {
+        const nowIso = new Date().toISOString();
         const upsert = await supabase.from("negotiation_contract_drafts").upsert(
           {
             negotiation_id: negotiationId,
             body_html: html,
-            updated_at: new Date().toISOString(),
+            updated_at: nowIso,
           } as never,
           { onConflict: "negotiation_id" }
         );
@@ -1651,17 +1748,19 @@ export function ContractEditorPanel({
           setLoadState({ kind: "error", message: upsert.error.message });
           return;
         }
-        draftUpdatedAt = new Date().toISOString();
+        draftUpdatedAt = nowIso;
       }
 
       setLoadState({
         kind: "ready",
-        title: (negRes.data as { title: string }).title,
+        title: negRow.title,
         html,
         draftUpdatedAt,
         latestVersionNumber: latest?.version_number ?? null,
         contentRevision: Date.now(),
         versions,
+        masterContractId: effectiveMasterId,
+        masterContractVersion,
       });
     } catch (e) {
       setLoadState({
@@ -1728,6 +1827,16 @@ export function ContractEditorPanel({
   const baselineLabel = baselineVersionRow
     ? `snapshot version ${baselineVersionRow.version_number}`
     : "your baseline (no snapshot saved yet)";
+
+  /** Draft review only: after restore-to-master, align baseline with master so diffs are not vs an old snapshot. */
+  const draftReviewBaselineHtml =
+    draftReviewBaselineOverrideHtml !== null
+      ? draftReviewBaselineOverrideHtml
+      : baselineHtml;
+  const draftReviewBaselineLabel =
+    draftReviewBaselineOverrideHtml !== null
+      ? "original master agreement"
+      : baselineLabel;
 
   const defaultHistA =
     loadState.kind === "ready" && loadState.versions.length >= 2
@@ -1890,6 +1999,7 @@ export function ContractEditorPanel({
         };
         writeMockVersions(negotiationId, [...stored, nextMock]);
         const versions = mockVersionsToItems([...stored, nextMock]);
+        setDraftReviewBaselineOverrideHtml(null);
         setLoadState((prev) =>
           prev.kind === "ready"
             ? { ...prev, latestVersionNumber: nextVersion, versions }
@@ -1920,6 +2030,7 @@ export function ContractEditorPanel({
       }
 
       const newRow = inserted as ContractVersionItem;
+      setDraftReviewBaselineOverrideHtml(null);
       setLoadState((prev) => {
         if (prev.kind !== "ready") return prev;
         return {
@@ -1988,6 +2099,61 @@ export function ContractEditorPanel({
           ? e.message.trim() || "Could not update working draft."
           : "Could not update working draft."
       );
+    }
+  }
+
+  async function handleRestoreToOriginal() {
+    if (!editor || loadState.kind !== "ready") return;
+    setSaveError(null);
+    setSaveSuccess(null);
+    if (!loadState.masterContractId) {
+      setSaveError(
+        "No master agreement is on file for this local yet. Upload one in Admin."
+      );
+      return;
+    }
+    if (
+      !window.confirm(
+        "Replace the working draft with the original master agreement text? Your current draft text will be lost unless you saved a snapshot first."
+      )
+    ) {
+      return;
+    }
+    setRestoreLoading(true);
+    try {
+      if (!isSupabaseConfigured()) {
+        setSaveError(
+          "Connect Supabase to restore from the published master agreement."
+        );
+        return;
+      }
+      const supabase = createSupabaseClient();
+      const { data, error } = await supabase
+        .from("master_contracts")
+        .select("body_html")
+        .eq("id", loadState.masterContractId)
+        .single();
+      if (error || !data) {
+        throw new Error(
+          error?.message?.trim() || "Could not load the master agreement."
+        );
+      }
+      const bodyHtml = (data as { body_html: string }).body_html;
+      editor.commands.setContent(bodyHtml);
+      setLoadedIntoEditorVersion(null);
+      setDraftReviewBaselineOverrideHtml(bodyHtml);
+      await persistDraftFromHtml(bodyHtml);
+      setSaveSuccess(
+        "Working draft restored to the original master agreement text. Proposal review now diffs from this baseline—not your previous snapshots."
+      );
+    } catch (e) {
+      setSaveError(
+        e instanceof Error
+          ? e.message.trim() || "Restore failed."
+          : "Restore failed."
+      );
+    } finally {
+      setRestoreLoading(false);
     }
   }
 
@@ -2140,6 +2306,22 @@ export function ContractEditorPanel({
                   {latestVersionNumber !== null
                     ? `Latest snapshot: v${latestVersionNumber}.`
                     : "No snapshots yet — create one when you reach a checkpoint."}
+                  {loadState.masterContractId ? (
+                    loadState.masterContractVersion !== null ? (
+                      <>
+                        {" "}
+                        Original master on file: v
+                        {loadState.masterContractVersion}.
+                      </>
+                    ) : (
+                      <> Original master linked.</>
+                    )
+                  ) : isSupabaseConfigured() ? (
+                    <>
+                      {" "}
+                      No master agreement linked yet — upload in Admin.
+                    </>
+                  ) : null}
                 </p>
                 {loadedIntoEditorVersion !== null ? (
                   <p className="mt-1.5 text-xs text-slate-600">
@@ -2165,6 +2347,23 @@ export function ContractEditorPanel({
                   className="w-full rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-50 sm:w-auto"
                 >
                   {snapshotSaving ? "Creating…" : "Create snapshot"}
+                </button>
+                <button
+                  type="button"
+                  disabled={
+                    restoreLoading ||
+                    !editor ||
+                    !loadState.masterContractId
+                  }
+                  title={
+                    loadState.masterContractId
+                      ? "Restore working draft to the published master agreement text"
+                      : "No master agreement linked for this negotiation yet"
+                  }
+                  onClick={() => void handleRestoreToOriginal()}
+                  className="w-full rounded-lg border border-amber-200 bg-amber-50/90 px-4 py-2 text-sm font-medium text-amber-950 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                >
+                  {restoreLoading ? "Restoring…" : "Restore to original"}
                 </button>
               </div>
             </div>
@@ -2324,6 +2523,7 @@ export function ContractEditorPanel({
                         versions[0]!.version_number
                       }
                       onChange={(e) => {
+                        setDraftReviewBaselineOverrideHtml(null);
                         const n = Number(e.target.value);
                         const latestNum = versions[0]!.version_number;
                         setCompareBaselineVersionNumber(
@@ -2491,7 +2691,20 @@ export function ContractEditorPanel({
                 Draft review &amp; proposals
               </h2>
               <p className="mt-1 max-w-3xl text-sm text-slate-600">
-                {baselineVersionRow ? (
+                {draftReviewBaselineOverrideHtml !== null ? (
+                  <>
+                    <span className="font-semibold text-slate-800">
+                      Working draft
+                    </span>{" "}
+                    vs{" "}
+                    <span className="font-semibold text-slate-800">
+                      original master agreement
+                    </span>{" "}
+                    (baseline after restore). New edits are tracked from this
+                    baseline; choose a snapshot baseline in the sidebar to
+                    switch back.
+                  </>
+                ) : baselineVersionRow ? (
                   <>
                     <span className="font-semibold text-slate-800">
                       Working draft
@@ -2520,16 +2733,18 @@ export function ContractEditorPanel({
             </div>
             <div className="p-4 sm:p-6 lg:p-8">
               <ContractCompareView
-                key={`${negotiationId}-${baselineVersionRow?.id ?? "none"}-${compareBaselineVersionNumber ?? "latest"}-draft`}
+                key={`${negotiationId}-${draftReviewBaselineOverrideHtml ? "master-bl" : baselineVersionRow?.id ?? "none"}-${compareBaselineVersionNumber ?? "latest"}-draft`}
                 negotiationId={negotiationId}
-                baselineHtml={baselineHtml}
+                baselineHtml={draftReviewBaselineHtml}
                 workingDraftHtml={liveEditorHtml}
-                baselineLabel={baselineLabel}
+                baselineLabel={draftReviewBaselineLabel}
                 showProposalReview
                 compareContextLine={
-                  baselineVersionRow
-                    ? `Working draft vs Version ${baselineVersionRow.version_number}`
-                    : "Working draft — add a snapshot to set a proposal baseline"
+                  draftReviewBaselineOverrideHtml !== null
+                    ? "Working draft vs original master (restored baseline)"
+                    : baselineVersionRow
+                      ? `Working draft vs Version ${baselineVersionRow.version_number}`
+                      : "Working draft — add a snapshot to set a proposal baseline"
                 }
                 onAfterProposalsSaved={async () => {
                   if (!editor || editor.isEmpty) return;
