@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildProposalBodyHtmlForSave,
   buildSectionDiffRows,
-  wrapDiffAdditionsInProposalBodyHtml,
   type SectionDiffRow,
 } from "@/lib/contract-compare";
 import {
@@ -68,13 +68,7 @@ function buildInsertPayload(
       ? resolvedTitle
       : defaults.title;
     const mergedBodyHtml =
-      groupRows
-        .map((r) => {
-          const raw = r.newBodyHtml?.trim();
-          if (!raw) return "";
-          return wrapDiffAdditionsInProposalBodyHtml(raw, r.parts);
-        })
-        .join("") || "";
+      groupRows.map((r) => buildProposalBodyHtmlForSave(r)).join("") || "";
 
     out.push({
       negotiation_id: negotiationId,
@@ -182,6 +176,7 @@ describe("draft review → save payload (mirrors ContractCompareView save path)"
         addedChars: 1,
         removedChars: 0,
         hasChange: true,
+        baselineBodyHtml: "",
       },
       {
         index: 2,
@@ -193,6 +188,7 @@ describe("draft review → save payload (mirrors ContractCompareView save path)"
         addedChars: 1,
         removedChars: 0,
         hasChange: true,
+        baselineBodyHtml: "",
       },
     ];
     const review: Record<number, ReviewItem> = {

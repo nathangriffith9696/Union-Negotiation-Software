@@ -10,10 +10,11 @@ import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { getNegotiationById } from "@/data/mock";
 import {
+  buildProposalBodyHtmlForSave,
   buildSectionDiffRows,
   sumChangeTotals,
   type SectionDiffRow,
-  wrapDiffAdditionsInProposalBodyHtml,
+  workspaceSectionRedlineHtml,
 } from "@/lib/contract-compare";
 import {
   findNewestAligningDraftProposalId,
@@ -316,33 +317,22 @@ type ProposalReviewItem = {
   summary: string;
 };
 
-/** Readable redline preview for proposal review (larger type, generous scroll area). */
+/** Readable redline preview for proposal review (rich HTML like the proposals list, including tables). */
 function WorkspaceRedlinePreview({ row }: { row: SectionDiffRow }) {
+  const html = workspaceSectionRedlineHtml(row);
+  if (!html.trim()) {
+    return (
+      <div className="min-h-[14rem] max-h-[min(55vh,32rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-600 shadow-inner shadow-slate-900/[0.02]">
+        No preview HTML for this section.
+      </div>
+    );
+  }
   return (
     <div className="min-h-[14rem] max-h-[min(55vh,32rem)] overflow-y-auto rounded-lg border border-slate-200 bg-white p-4 text-sm leading-relaxed text-slate-900 shadow-inner shadow-slate-900/[0.02]">
-      {row.parts.map((part, i) => {
-        if (part.added) {
-          return (
-            <mark
-              key={`snip-${row.index}-a-${i}`}
-              className="mx-0.5 inline rounded border border-emerald-400/90 bg-emerald-100 px-1 py-0.5 font-normal text-emerald-950 [text-decoration:none]"
-            >
-              {part.value}
-            </mark>
-          );
-        }
-        if (part.removed) {
-          return (
-            <span
-              key={`snip-${row.index}-r-${i}`}
-              className="mx-0.5 inline rounded border border-rose-300 bg-rose-50 px-1 py-0.5 text-rose-950 line-through decoration-rose-700 decoration-2"
-            >
-              {part.value}
-            </span>
-          );
-        }
-        return <span key={`snip-${row.index}-c-${i}`}>{part.value}</span>;
-      })}
+      <div
+        className="contract-editor-rich-preview"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
   );
 }
@@ -355,6 +345,8 @@ function ContractCompareView({
   showProposalReview = true,
   compareContextLine,
   onAfterProposalsSaved,
+  /** Bump when workspace data reloads (e.g. restore) so saved-proposal list refetches. */
+  proposalsListSyncKey = 0,
 }: {
   negotiationId: string;
   /** Older / baseline side of the diff (formal snapshot HTML). */
@@ -371,6 +363,7 @@ function ContractCompareView({
    * current editor HTML so reopening the workspace does not load stale draft content.
    */
   onAfterProposalsSaved?: () => Promise<void>;
+  proposalsListSyncKey?: number;
 }) {
   const router = useRouter();
 
@@ -405,13 +398,10 @@ function ContractCompareView({
     return () => {
       cancelled = true;
     };
-  }, [negotiationId, showProposalReview]);
+  }, [negotiationId, showProposalReview, proposalsListSyncKey]);
 
   const getCanonicalRowBody = useCallback((row: SectionDiffRow) => {
-    const raw = row.newBodyHtml?.trim() ?? "";
-    if (!raw) return "";
-    if (typeof document === "undefined") return raw;
-    return wrapDiffAdditionsInProposalBodyHtml(raw, row.parts);
+    return buildProposalBodyHtmlForSave(row);
   }, []);
 
   const rowsBase = useMemo(
@@ -572,13 +562,7 @@ function ContractCompareView({
           .filter(Boolean)
           .join("");
         const mergedBodyHtml =
-          rows
-            .map((r) => {
-              const raw = r.newBodyHtml?.trim();
-              if (!raw) return "";
-              return wrapDiffAdditionsInProposalBodyHtml(raw, r.parts);
-            })
-            .join("") || "";
+          rows.map((r) => buildProposalBodyHtmlForSave(r)).join("") || "";
 
         const it0 = reviewItems[primary.index]!;
         const defaults0 = buildDefaultProposalReviewFields(primary, negotiationId);
@@ -1190,10 +1174,10 @@ function ContractCompareView({
         <p className="mb-3 flex flex-wrap gap-x-4 gap-y-2 text-[11px] leading-snug text-slate-500">
           <span>
             Sections are matched by heading text (including close renames and
-            reordering), then diffed as plain text. Text inside &lt;s&gt;,
-            &lt;strike&gt;, or &lt;del&gt; is omitted from that plain text so it
-            appears as removed language here. Bold, italics, and strike styling
-            still show fully in the editor and preview.
+            reordering), then compared for changes. Previews use the same rich
+            HTML as saved proposals (tables, lists, formatting). Text inside
+            &lt;s&gt;, &lt;strike&gt;, or &lt;del&gt; is omitted from the plain
+            diff used for change detection so struck language counts as removed.
           </span>
         </p>
         <p className="mb-3 flex flex-wrap gap-4 text-xs font-medium text-slate-600">
@@ -1225,31 +1209,12 @@ function ContractCompareView({
                 <h3 className="mb-2 text-sm font-semibold text-slate-800">
                   {row.headingLabel}
                 </h3>
-                <div className="whitespace-pre-wrap break-words text-sm leading-relaxed text-slate-900">
-                  {row.parts.map((part, i) => {
-                    if (part.added) {
-                      return (
-                        <mark
-                          key={`${row.index}-a-${i}`}
-                          className="mx-0.5 inline rounded border border-emerald-400/90 bg-emerald-100 px-1 py-0.5 font-normal text-emerald-950 shadow-sm [text-decoration:none]"
-                        >
-                          {part.value}
-                        </mark>
-                      );
-                    }
-                    if (part.removed) {
-                      return (
-                        <span
-                          key={`${row.index}-r-${i}`}
-                          className="mx-0.5 inline rounded border border-rose-300 bg-rose-50 px-1 py-0.5 text-rose-950 line-through decoration-rose-700 decoration-2"
-                        >
-                          {part.value}
-                        </span>
-                      );
-                    }
-                    return <span key={`${row.index}-c-${i}`}>{part.value}</span>;
-                  })}
-                </div>
+                <div
+                  className="contract-editor-rich-preview break-words text-sm leading-relaxed text-slate-900"
+                  dangerouslySetInnerHTML={{
+                    __html: workspaceSectionRedlineHtml(row),
+                  }}
+                />
               </section>
             ))
           )}
@@ -1502,17 +1467,46 @@ function isUnseededDraft(html: string | null | undefined): boolean {
   return t === "" || t === SUPABASE_DEFAULT_HTML.trim();
 }
 
+/** Persisted so draft review still diffs vs master after refresh (see draftReviewBaselineOverrideHtml). */
+const DRAFT_REVIEW_BASELINE_MASTER_SESSION = "union-contract-draft-bl-master:v1:";
+
+function draftReviewBaselineMasterSessionKey(negotiationId: string) {
+  return `${DRAFT_REVIEW_BASELINE_MASTER_SESSION}${negotiationId}`;
+}
+
+function setDraftReviewBaselineMasterSession(negotiationId: string) {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(draftReviewBaselineMasterSessionKey(negotiationId), "master");
+}
+
+function clearDraftReviewBaselineMasterSession(negotiationId: string) {
+  if (typeof window === "undefined") return;
+  sessionStorage.removeItem(draftReviewBaselineMasterSessionKey(negotiationId));
+}
+
+function shouldUseDraftReviewBaselineMasterSession(negotiationId: string): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    sessionStorage.getItem(draftReviewBaselineMasterSessionKey(negotiationId)) ===
+    "master"
+  );
+}
+
 export function ContractEditorPanel({
   negotiationId,
 }: {
   negotiationId: string;
 }) {
+  const router = useRouter();
+
   const [loadState, setLoadState] = useState<
     | { kind: "loading" }
     | { kind: "not_found" }
     | { kind: "error"; message: string }
     | {
         kind: "ready";
+        /** Same as route param; used to detect soft refresh vs navigation. */
+        negotiationId: string;
         title: string;
         html: string;
         draftUpdatedAt: string | null;
@@ -1555,25 +1549,43 @@ export function ContractEditorPanel({
   const [restoreLoading, setRestoreLoading] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
-  const [liveEditorHtml, setLiveEditorHtml] = useState("");
+  /** True while re-fetching the same negotiation without tearing down the UI (keeps snapshots visible). */
+  const [workspaceSyncing, setWorkspaceSyncing] = useState(false);
 
   const lastAppliedRevision = useRef<number>(-1);
   const previewContentRef = useRef<HTMLDivElement | null>(null);
+  const loadStateRef = useRef(loadState);
+  loadStateRef.current = loadState;
 
-  const loadData = useCallback(async () => {
-    setLoadState({ kind: "loading" });
-    setSaveError(null);
-    setSaveSuccess(null);
-    setPreviewSnapshotVersion(null);
-    setWorkspaceTab("draftReview");
-    setCompareBaselineVersionNumber(null);
-    setHistoryPickA(null);
-    setHistoryPickB(null);
-    setLoadedIntoEditorVersion(null);
-    setDraftReviewBaselineOverrideHtml(null);
-    lastAppliedRevision.current = -1;
+  const loadData = useCallback(
+    async (opts?: { forceFullReload?: boolean }) => {
+    const prev = loadStateRef.current;
+    const softSync =
+      !opts?.forceFullReload &&
+      prev.kind === "ready" &&
+      prev.negotiationId === negotiationId &&
+      negotiationId.length > 0;
+
+    if (!softSync) {
+      setLoadState({ kind: "loading" });
+      setSaveError(null);
+      setSaveSuccess(null);
+      setPreviewSnapshotVersion(null);
+      setWorkspaceTab("draftReview");
+      setCompareBaselineVersionNumber(null);
+      setHistoryPickA(null);
+      setHistoryPickB(null);
+      setLoadedIntoEditorVersion(null);
+      setDraftReviewBaselineOverrideHtml(null);
+      lastAppliedRevision.current = -1;
+    } else {
+      setWorkspaceSyncing(true);
+      setSaveError(null);
+      setSaveSuccess(null);
+    }
 
     if (!negotiationId) {
+      setWorkspaceSyncing(false);
       setLoadState({ kind: "not_found" });
       return;
     }
@@ -1581,6 +1593,7 @@ export function ContractEditorPanel({
     if (!isSupabaseConfigured()) {
       const n = getNegotiationById(negotiationId);
       if (!n) {
+        setWorkspaceSyncing(false);
         setLoadState({ kind: "not_found" });
         return;
       }
@@ -1593,8 +1606,10 @@ export function ContractEditorPanel({
           ? draftRow.body_html
           : latest?.body_html?.trim()) || MOCK_DEFAULT_HTML;
       const draftUpdatedAt = draftRow?.updated_at ?? null;
+      setWorkspaceSyncing(false);
       setLoadState({
         kind: "ready",
+        negotiationId,
         title: n.title,
         html,
         draftUpdatedAt,
@@ -1628,20 +1643,36 @@ export function ContractEditorPanel({
       ]);
 
       if (negRes.error) {
+        setWorkspaceSyncing(false);
+        if (softSync) {
+          setSaveError(`Could not refresh workspace: ${negRes.error.message}`);
+          return;
+        }
         setLoadState({ kind: "error", message: negRes.error.message });
         return;
       }
       if (!negRes.data) {
+        setWorkspaceSyncing(false);
         setLoadState({ kind: "not_found" });
         return;
       }
 
       if (verRes.error) {
+        setWorkspaceSyncing(false);
+        if (softSync) {
+          setSaveError(`Could not refresh workspace: ${verRes.error.message}`);
+          return;
+        }
         setLoadState({ kind: "error", message: verRes.error.message });
         return;
       }
 
       if (draftRes.error) {
+        setWorkspaceSyncing(false);
+        if (softSync) {
+          setSaveError(`Could not refresh workspace: ${draftRes.error.message}`);
+          return;
+        }
         setLoadState({ kind: "error", message: draftRes.error.message });
         return;
       }
@@ -1672,6 +1703,11 @@ export function ContractEditorPanel({
           .limit(1)
           .maybeSingle();
         if (mErr) {
+          setWorkspaceSyncing(false);
+          if (softSync) {
+            setSaveError(`Could not refresh workspace: ${mErr.message}`);
+            return;
+          }
           setLoadState({ kind: "error", message: mErr.message });
           return;
         }
@@ -1685,14 +1721,24 @@ export function ContractEditorPanel({
       }
 
       let effectiveMasterId = negRow.master_contract_id;
-      if (!effectiveMasterId && latestMaster) {
-        const { error: linkErr } = await supabase
-          .from("negotiations")
-          .update({ master_contract_id: latestMaster.id } as never)
-          .eq("id", negotiationId)
-          .is("master_contract_id", null);
-        if (!linkErr) {
-          effectiveMasterId = latestMaster.id;
+      if (latestMaster) {
+        if (!effectiveMasterId) {
+          const { error: linkErr } = await supabase
+            .from("negotiations")
+            .update({ master_contract_id: latestMaster.id } as never)
+            .eq("id", negotiationId)
+            .is("master_contract_id", null);
+          if (!linkErr) {
+            effectiveMasterId = latestMaster.id;
+          }
+        } else if (effectiveMasterId !== latestMaster.id) {
+          const { error: bumpErr } = await supabase
+            .from("negotiations")
+            .update({ master_contract_id: latestMaster.id } as never)
+            .eq("id", negotiationId);
+          if (!bumpErr) {
+            effectiveMasterId = latestMaster.id;
+          }
         }
       }
 
@@ -1745,27 +1791,51 @@ export function ContractEditorPanel({
           { onConflict: "negotiation_id" }
         );
         if (upsert.error) {
+          setWorkspaceSyncing(false);
+          if (softSync) {
+            setSaveError(`Could not refresh workspace: ${upsert.error.message}`);
+            return;
+          }
           setLoadState({ kind: "error", message: upsert.error.message });
           return;
         }
         draftUpdatedAt = nowIso;
       }
 
+      setWorkspaceSyncing(false);
       setLoadState({
         kind: "ready",
+        negotiationId,
         title: negRow.title,
         html,
         draftUpdatedAt,
         latestVersionNumber: latest?.version_number ?? null,
         contentRevision: Date.now(),
         versions,
-        masterContractId: effectiveMasterId,
-        masterContractVersion,
+        /** Prefer latest published row for this local so restore tracks new Admin uploads. */
+        masterContractId: latestMaster?.id ?? effectiveMasterId,
+        masterContractVersion: latestMaster
+          ? latestMaster.version_number
+          : masterContractVersion,
       });
+
+      if (
+        shouldUseDraftReviewBaselineMasterSession(negotiationId) &&
+        latestMaster?.body_html
+      ) {
+        setDraftReviewBaselineOverrideHtml(latestMaster.body_html);
+      }
     } catch (e) {
+      setWorkspaceSyncing(false);
+      const msg =
+        e instanceof Error ? e.message : "Something went wrong";
+      if (softSync) {
+        setSaveError(`Could not refresh workspace: ${msg}`);
+        return;
+      }
       setLoadState({
         kind: "error",
-        message: e instanceof Error ? e.message : "Something went wrong",
+        message: msg,
       });
     }
   }, [negotiationId]);
@@ -1792,15 +1862,19 @@ export function ContractEditorPanel({
     lastAppliedRevision.current = loadState.contentRevision;
   }, [editor, loadState]);
 
-  useEffect(() => {
-    if (!editor || loadState.kind !== "ready") return;
-    const sync = () => setLiveEditorHtml(editor.getHTML());
-    sync();
-    editor.on("update", sync);
-    return () => {
-      editor.off("update", sync);
-    };
-  }, [editor, loadState.kind]);
+  /** Subscribe via TipTap React store (`transaction`), not only `update` — avoids stale HTML when `update` is skipped. */
+  const liveEditorHtml =
+    useEditorState({
+      editor: loadState.kind === "ready" && editor ? editor : null,
+      selector: ({ editor: ed }) => {
+        if (!ed || ed.isDestroyed) return "";
+        return ed.getHTML();
+      },
+      equalityFn: (a, b) => a === b,
+    }) ?? "";
+
+  const readyContentRevision =
+    loadState.kind === "ready" ? loadState.contentRevision : 0;
 
   const previewSnapshot =
     loadState.kind === "ready" && previewSnapshotVersion !== null
@@ -2000,6 +2074,7 @@ export function ContractEditorPanel({
         writeMockVersions(negotiationId, [...stored, nextMock]);
         const versions = mockVersionsToItems([...stored, nextMock]);
         setDraftReviewBaselineOverrideHtml(null);
+        clearDraftReviewBaselineMasterSession(negotiationId);
         setLoadState((prev) =>
           prev.kind === "ready"
             ? { ...prev, latestVersionNumber: nextVersion, versions }
@@ -2031,6 +2106,7 @@ export function ContractEditorPanel({
 
       const newRow = inserted as ContractVersionItem;
       setDraftReviewBaselineOverrideHtml(null);
+      clearDraftReviewBaselineMasterSession(negotiationId);
       setLoadState((prev) => {
         if (prev.kind !== "ready") return prev;
         return {
@@ -2114,7 +2190,7 @@ export function ContractEditorPanel({
     }
     if (
       !window.confirm(
-        "Replace the working draft with the original master agreement text? Your current draft text will be lost unless you saved a snapshot first."
+        "Restore replaces the working draft with the published master agreement text and permanently deletes every proposal and every snapshot milestone for this negotiation. Your current draft text is replaced. Continue?"
       )
     ) {
       return;
@@ -2139,12 +2215,32 @@ export function ContractEditorPanel({
         );
       }
       const bodyHtml = (data as { body_html: string }).body_html;
+
+      const { error: deleteProposalsError } = await supabase.rpc(
+        "delete_all_proposals_for_negotiation_restore",
+        { p_negotiation_id: negotiationId }
+      );
+      if (deleteProposalsError) {
+        throw new Error(
+          deleteProposalsError.message.trim() ||
+            "Could not remove existing proposals."
+        );
+      }
+
       editor.commands.setContent(bodyHtml);
       setLoadedIntoEditorVersion(null);
       setDraftReviewBaselineOverrideHtml(bodyHtml);
+      setDraftReviewBaselineMasterSession(negotiationId);
+      setWorkspaceTab("draftReview");
+      setPreviewSnapshotVersion(null);
+      setCompareBaselineVersionNumber(null);
+      setHistoryPickA(null);
+      setHistoryPickB(null);
       await persistDraftFromHtml(bodyHtml);
+      await loadData();
+      router.refresh();
       setSaveSuccess(
-        "Working draft restored to the original master agreement text. Proposal review now diffs from this baseline—not your previous snapshots."
+        "Contract workspace reset: working draft matches the master agreement; all proposals and snapshot milestones for this negotiation were removed. Proposal review starts clean from this baseline."
       );
     } catch (e) {
       setSaveError(
@@ -2214,7 +2310,7 @@ export function ContractEditorPanel({
           <p className="text-sm text-red-800">{loadState.message}</p>
           <button
             type="button"
-            onClick={() => void loadData()}
+            onClick={() => void loadData({ forceFullReload: true })}
             className="mt-4 rounded-lg border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
             Retry
@@ -2245,6 +2341,10 @@ export function ContractEditorPanel({
       </p>
 
       <PageHeader title="Contract editor" description={title} />
+
+      {workspaceSyncing ? (
+        <p className="mb-4 text-sm text-slate-500">Refreshing workspace…</p>
+      ) : null}
 
       {!isSupabaseConfigured() ? (
         <Card className="mb-4 border-amber-200 bg-amber-50/80">
@@ -2524,6 +2624,7 @@ export function ContractEditorPanel({
                       }
                       onChange={(e) => {
                         setDraftReviewBaselineOverrideHtml(null);
+                        clearDraftReviewBaselineMasterSession(negotiationId);
                         const n = Number(e.target.value);
                         const latestNum = versions[0]!.version_number;
                         setCompareBaselineVersionNumber(
@@ -2733,12 +2834,13 @@ export function ContractEditorPanel({
             </div>
             <div className="p-4 sm:p-6 lg:p-8">
               <ContractCompareView
-                key={`${negotiationId}-${draftReviewBaselineOverrideHtml ? "master-bl" : baselineVersionRow?.id ?? "none"}-${compareBaselineVersionNumber ?? "latest"}-draft`}
+                key={`${negotiationId}-${draftReviewBaselineOverrideHtml ? "master-bl" : baselineVersionRow?.id ?? "none"}-${compareBaselineVersionNumber ?? "latest"}-${readyContentRevision}-draft`}
                 negotiationId={negotiationId}
                 baselineHtml={draftReviewBaselineHtml}
                 workingDraftHtml={liveEditorHtml}
                 baselineLabel={draftReviewBaselineLabel}
                 showProposalReview
+                proposalsListSyncKey={readyContentRevision}
                 compareContextLine={
                   draftReviewBaselineOverrideHtml !== null
                     ? "Working draft vs original master (restored baseline)"

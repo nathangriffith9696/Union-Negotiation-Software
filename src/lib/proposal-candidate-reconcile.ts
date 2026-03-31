@@ -1,4 +1,7 @@
-import type { SectionDiffRow } from "@/lib/contract-compare";
+import {
+  buildProposalBodyHtmlForBaselineSnapshot,
+  type SectionDiffRow,
+} from "@/lib/contract-compare";
 import { extractArticleNumberFromTitle } from "@/lib/proposal-article-sort";
 import type { ProposalStatus } from "@/types/database";
 
@@ -170,7 +173,8 @@ export function matchChangedRowsToSavedProposals(
  * When working copy matches the snapshot in strike-stripped plain text (so {@link buildSectionDiffRows}
  * yields `hasChange: false`) but the **newest aligning draft** `body_html` still reflects older
  * markup or wording, force `hasChange: true` on every row in that proposal group so draft review
- * stays actionable (un-strike, delete reverted additions, etc.).
+ * stays actionable — unless merged canonical HTML already matches the **baseline snapshot** (user
+ * fully reverted); then a stale draft mismatch is ignored.
  */
 export function markSectionRowsWhenProposalDraftDrifts(
   rows: SectionDiffRow[],
@@ -208,6 +212,12 @@ export function markSectionRowsWhenProposalDraftDrifts(
       getCanonicalRowBody
     );
     if (bodiesMatch(mergedCanon, p.body_html)) continue;
+
+    const mergedBaselineCanon = mergedCanonicalBodyForProposalGroup(
+      groupRows,
+      buildProposalBodyHtmlForBaselineSnapshot
+    );
+    if (bodiesMatch(mergedCanon, mergedBaselineCanon)) continue;
 
     for (const r of groupRows) {
       driftIndices.add(r.index);

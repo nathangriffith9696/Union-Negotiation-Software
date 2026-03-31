@@ -2,7 +2,9 @@ import { diffWordsWithSpace } from "diff";
 import type { Change } from "diff";
 import { describe, expect, it } from "vitest";
 import {
+  buildProposalBodyHtmlForSave,
   buildSectionDiffRows,
+  workspaceSectionRedlineHtml,
   wrapDiffAdditionsInProposalBodyHtml,
 } from "./contract-compare";
 
@@ -157,5 +159,87 @@ describe("wrapDiffAdditionsInProposalBodyHtml", () => {
     const row = rows.find((r) => r.headingLabel.includes("A"))!;
     const raw = row.newBodyHtml;
     expect(wrapDiffAdditionsInProposalBodyHtml(raw, row.parts)).toBe(raw);
+  });
+});
+
+describe("buildProposalBodyHtmlForSave", () => {
+  it("serializes plain-delete redline as s/strong so proposals list matches draft review", () => {
+    const prev = contractDoc([
+      { heading: "Article 1", bodyHtml: "<p>keep remove me end</p>" },
+    ]);
+    const next = contractDoc([
+      { heading: "Article 1", bodyHtml: "<p>keep end</p>" },
+    ]);
+    const rows = buildSectionDiffRows(prev, next);
+    const row = rows.find((r) => r.headingLabel.includes("Article 1"))!;
+    const out = buildProposalBodyHtmlForSave(row);
+    expect(out).toContain("<s>");
+    expect(out).toContain("remove me");
+    expect(out).toContain("proposal-diff-from-parts");
+  });
+
+  it("keeps table markup on save when plain-delete would otherwise inline-diff (proposals page)", () => {
+    const prev = contractDoc([
+      {
+        heading: "Wages",
+        bodyHtml:
+          "<table><tbody><tr><td><p>hello world</p></td></tr></tbody></table>",
+      },
+    ]);
+    const next = contractDoc([
+      {
+        heading: "Wages",
+        bodyHtml:
+          "<table><tbody><tr><td><p>hello</p></td></tr></tbody></table>",
+      },
+    ]);
+    const rows = buildSectionDiffRows(prev, next);
+    const row = rows.find((r) => r.headingLabel.includes("Wages"))!;
+    const out = buildProposalBodyHtmlForSave(row);
+    expect(out).toMatch(/<\s*table\b/i);
+    expect(out).toMatch(/<\s*td\b/i);
+    expect(out).not.toContain("proposal-diff-from-parts");
+  });
+
+  it("keeps rich HTML when the editor used strike for removals", () => {
+    const prev = contractDoc([
+      { heading: "Article 1", bodyHtml: "<p>old text keep</p>" },
+    ]);
+    const next = contractDoc([
+      {
+        heading: "Article 1",
+        bodyHtml: "<p><s>old text</s> keep ADDED</p>",
+      },
+    ]);
+    const rows = buildSectionDiffRows(prev, next);
+    const row = rows.find((r) => r.headingLabel.includes("Article 1"))!;
+    const out = buildProposalBodyHtmlForSave(row);
+    expect(out).toContain("<p>");
+    expect(out).toContain("<s>");
+    expect(out).not.toContain("proposal-diff-from-parts");
+  });
+});
+
+describe("workspaceSectionRedlineHtml", () => {
+  it("preserves table markup in the preview when the section body includes a table", () => {
+    const prev = contractDoc([
+      {
+        heading: "Wages",
+        bodyHtml:
+          "<table><tbody><tr><td><p>hello world</p></td></tr></tbody></table>",
+      },
+    ]);
+    const next = contractDoc([
+      {
+        heading: "Wages",
+        bodyHtml:
+          "<table><tbody><tr><td><p>hello</p></td></tr></tbody></table>",
+      },
+    ]);
+    const rows = buildSectionDiffRows(prev, next);
+    const row = rows.find((r) => r.headingLabel.includes("Wages"))!;
+    const out = workspaceSectionRedlineHtml(row);
+    expect(out).toMatch(/<\s*table\b/i);
+    expect(out).toMatch(/<\s*td\b/i);
   });
 });

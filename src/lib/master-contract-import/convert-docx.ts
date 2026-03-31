@@ -20,8 +20,9 @@ export type ConvertDocxResult = {
 export async function convertDocxToHtml(
   arrayBuffer: ArrayBuffer
 ): Promise<ConvertDocxResult> {
+  // Mammoth expects `buffer`, `path`, or `file` — not `arrayBuffer` (see mammoth/lib/unzip.js).
   const result = await mammoth.convertToHtml(
-    { arrayBuffer },
+    { buffer: Buffer.from(arrayBuffer) },
     { styleMap: STYLE_MAP }
   );
   const messages = result.messages.map((m) => m.message);

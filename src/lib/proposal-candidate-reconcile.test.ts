@@ -1,6 +1,10 @@
 import type { Change } from "diff";
 import { describe, expect, it } from "vitest";
-import type { SectionDiffRow } from "./contract-compare";
+import {
+  buildProposalBodyHtmlForSave,
+  buildSectionDiffRows,
+  type SectionDiffRow,
+} from "./contract-compare";
 import {
   findNewestAligningDraftProposalId,
   markSectionRowsWhenProposalDraftDrifts,
@@ -208,6 +212,7 @@ function diffRow(
     removedChars: 0,
     hasChange: true,
     newBodyHtml,
+    baselineBodyHtml: "",
   };
 }
 
@@ -228,6 +233,7 @@ function stableDiffRow(
     removedChars: 0,
     hasChange: false,
     newBodyHtml,
+    baselineBodyHtml: "",
   };
 }
 
@@ -248,6 +254,71 @@ describe("markSectionRowsWhenProposalDraftDrifts", () => {
     ];
     const out = markSectionRowsWhenProposalDraftDrifts(rows, saved, canon);
     expect(out[0]!.hasChange).toBe(true);
+  });
+
+  it("does not force hasChange when working matches baseline snapshot but stale draft differs", () => {
+    const html = "<p>scope only</p>";
+    const rows: SectionDiffRow[] = [
+      { ...stableDiffRow(0, "Article 2 — Scope", html), baselineBodyHtml: html },
+    ];
+    const saved: SavedProposalForReconcile[] = [
+      row({
+        id: "d1",
+        title: "Article 2 — Scope",
+        body_html: "<p>scope only</p><p>still in draft</p>",
+        created_at: "2025-01-01T00:00:00Z",
+      }),
+    ];
+    const out = markSectionRowsWhenProposalDraftDrifts(rows, saved, canon);
+    expect(out[0]!.hasChange).toBe(false);
+  });
+
+  it("table row reverted to baseline: no drift vs stale draft saved while row existed", () => {
+    function contractDoc(
+      sections: Array<{ heading: string; bodyHtml: string }>
+    ): string {
+      return sections.map((s) => `<h2>${s.heading}</h2>${s.bodyHtml}`).join("");
+    }
+    const baseline = contractDoc([
+      {
+        heading: "Wages",
+        bodyHtml:
+          "<table><tbody><tr><td><p>A</p></td></tr></tbody></table>",
+      },
+    ]);
+    const withExtraRow = contractDoc([
+      {
+        heading: "Wages",
+        bodyHtml:
+          "<table><tbody><tr><td><p>A</p></td></tr><tr><td><p>B</p></td></tr></tbody></table>",
+      },
+    ]);
+    const whenEdited = buildSectionDiffRows(baseline, withExtraRow);
+    const wagesEdited = whenEdited.find((r) => r.headingLabel.includes("Wages"))!;
+    const staleDraftBody = buildProposalBodyHtmlForSave(wagesEdited);
+
+    const revertedRows = buildSectionDiffRows(baseline, baseline);
+    const wagesReverted = revertedRows.find((r) =>
+      r.headingLabel.includes("Wages")
+    )!;
+    expect(wagesReverted.hasChange).toBe(false);
+
+    const saved: SavedProposalForReconcile[] = [
+      row({
+        id: "d-wages",
+        title: "Wages",
+        body_html: staleDraftBody,
+        created_at: "2025-01-01T00:00:00Z",
+      }),
+    ];
+    const out = markSectionRowsWhenProposalDraftDrifts(
+      revertedRows,
+      saved,
+      buildProposalBodyHtmlForSave
+    );
+    expect(out.find((r) => r.headingLabel.includes("Wages"))!.hasChange).toBe(
+      false
+    );
   });
 
   it("leaves rows unchanged when merged canon matches the newest aligning draft", () => {

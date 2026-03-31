@@ -20,6 +20,11 @@ export type SectionDiffRow = {
    * h1–h3 until the next heading (preamble = nodes before the first h1–h3). Preserves TipTap markup.
    */
   newBodyHtml: string;
+  /**
+   * Matching section body from `previousHtml` (baseline snapshot), or empty when there is no
+   * baseline slice (e.g. new-only section). Used to detect full reverts vs stale draft rows.
+   */
+  baselineBodyHtml: string;
 };
 
 type HeadedBlock = { heading: string; plain: string };
@@ -363,13 +368,22 @@ function plainTextIncludingStrikeFromSectionBodyHtml(html: string): string {
     .trim();
 }
 
+/** Plain text on the “old” side of the section diff (from {@link SectionDiffRow.parts}). */
+function prevPlainFromParts(parts: Change[]): string {
+  let s = "";
+  for (const p of parts) {
+    if (!p.added) s += p.value;
+  }
+  return s;
+}
+
 function buildDiffRow(
   index: number,
   headingLabel: string,
   prevPlain: string,
   nextPlain: string,
   newBodyHtml: string,
-  opts?: { baselineHadNoMatchingSection?: boolean }
+  opts?: { baselineHadNoMatchingSection?: boolean; baselineBodyHtml?: string }
 ): SectionDiffRow {
   const parts = diffWordsWithSpace(prevPlain, nextPlain);
   const stats = analyzeParts(parts);
@@ -393,6 +407,7 @@ function buildDiffRow(
     ...stats,
     hasChange,
     newBodyHtml,
+    baselineBodyHtml: opts?.baselineBodyHtml ?? "",
   };
 }
 
@@ -503,6 +518,8 @@ export function buildSectionDiffRows(
   selectedHtml: string
 ): SectionDiffRow[] {
   const prev = buildContractSections(previousHtml);
+  const prevSec = buildContractSectionsWithBodyHtml(previousHtml);
+  const prevEx = extractPreambleHeadedWithBody(prevSec);
   const nextSec = buildContractSectionsWithBodyHtml(selectedHtml);
   const nextEx = extractPreambleHeadedWithBody(nextSec);
 
@@ -533,6 +550,7 @@ export function buildSectionDiffRows(
         ...stats,
         hasChange: false,
         newBodyHtml: fallbackHtml,
+        baselineBodyHtml: "",
       },
     ];
   }
@@ -554,7 +572,8 @@ export function buildSectionDiffRows(
       "Preamble (before first heading)",
       prevPh.preamblePlain,
       nextPh.preamblePlain,
-      nextEx.preambleHtml
+      nextEx.preambleHtml,
+      { baselineBodyHtml: prevEx.preambleHtml }
     )
   );
 
@@ -570,13 +589,15 @@ export function buildSectionDiffRows(
           matchedHeadingLabel(oldBlock.heading, newBlock.heading),
           oldBlock.plain,
           newBlock.plain,
-          bodyHtml
+          bodyHtml,
+          { baselineBodyHtml: prevEx.headed[oi]!.bodyHtml }
         )
       );
     } else {
       rows.push(
         buildDiffRow(rowIndex++, newBlock.heading, "", newBlock.plain, bodyHtml, {
           baselineHadNoMatchingSection: true,
+          baselineBodyHtml: "",
         })
       );
     }
@@ -591,7 +612,8 @@ export function buildSectionDiffRows(
         `${oldBlock.heading} (removed)`,
         oldBlock.plain,
         "",
-        ""
+        "",
+        { baselineBodyHtml: prevEx.headed[oi]!.bodyHtml }
       )
     );
   }
@@ -900,4 +922,112 @@ export function wrapDiffAdditionsInProposalBodyHtml(
   }
 
   return root.innerHTML;
+}
+
+function escapeHtmlForProposalBody(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Inline HTML aligned with draft-review redline: unchanged runs, `<s>` for removals,
+ * `<strong>` for additions. Uses `white-space: pre-wrap` via `.proposal-diff-from-parts`.
+ */
+export function diffPartsToInlineProposalHtml(parts: Change[]): string {
+  const chunks: string[] = [];
+  for (const p of parts) {
+    const esc = escapeHtmlForProposalBody(p.value);
+    if (p.added) chunks.push(`<strong>${esc}</strong>`);
+    else if (p.removed) chunks.push(`<s>${esc}</s>`);
+    else chunks.push(esc);
+  }
+  return `<div class="proposal-diff-from-parts">${chunks.join("")}</div>`;
+}
+
+function hasStrikeDeletionMarkup(html: string): boolean {
+  return /<\s*(s|strike|del)\b/i.test(html) || /<\/(s|strike|del)>/i.test(html);
+}
+
+/**
+ * Persisted proposal `body_html`: prefer rich HTML from the editor (headings, tables, `<s>` when
+ * the user struck text). When removals exist only in the word diff (plain delete in the editor),
+ * persist the same inline redline as draft review so the proposals list matches.
+ */
+export function buildProposalBodyHtmlForSave(row: SectionDiffRow): string {
+  const raw = row.newBodyHtml?.trim() ?? "";
+  const hasRemovedParts = row.parts.some((p) => p.removed && p.value.length > 0);
+
+  if (!raw) {
+    return hasRemovedParts ? diffPartsToInlineProposalHtml(row.parts) : "";
+  }
+
+  const wrapped = wrapDiffAdditionsInProposalBodyHtml(raw, row.parts);
+  if (!hasRemovedParts) return wrapped;
+  if (hasStrikeDeletionMarkup(raw)) return wrapped;
+
+  // Plain-delete redline as inline s/strong would drop `<table>` structure; keep rich HTML so the
+  // proposals list matches draft review (see `workspaceSectionRedlineHtml`).
+  if (hasTableMarkup(raw)) {
+    if (hasTableMarkup(wrapped)) return wrapped;
+    return raw;
+  }
+
+  return diffPartsToInlineProposalHtml(row.parts);
+}
+
+/**
+ * Canonical persisted HTML for the baseline snapshot alone (no working-vs-baseline diff).
+ * Used with {@link mergedCanonicalBodyForProposalGroup} to detect when the editor matches
+ * the selected baseline even if a stale draft proposal row still differs on disk.
+ */
+export function buildProposalBodyHtmlForBaselineSnapshot(row: SectionDiffRow): string {
+  const prevPlain = prevPlainFromParts(row.parts);
+  const noopParts = diffWordsWithSpace(prevPlain, prevPlain);
+  const synthetic: SectionDiffRow = {
+    ...row,
+    newBodyHtml: row.baselineBodyHtml,
+    parts: noopParts,
+    hasChange: false,
+    addedWords: 0,
+    removedWords: 0,
+    addedChars: 0,
+    removedChars: 0,
+  };
+  return buildProposalBodyHtmlForSave(synthetic);
+}
+
+function hasTableMarkup(html: string): boolean {
+  return /<\s*table\b/i.test(html);
+}
+
+/**
+ * HTML for draft-review redline panels (per-section preview + “Reference — full redline”).
+ * Matches the proposals list where possible. When {@link buildProposalBodyHtmlForSave} would
+ * fall back to a plain-text inline diff and drop table markup, prefers addition-wrapped HTML or
+ * the working-draft section HTML so tables stay visible.
+ */
+export function workspaceSectionRedlineHtml(row: SectionDiffRow): string {
+  const raw = row.newBodyHtml?.trim() ?? "";
+  const fromSave = buildProposalBodyHtmlForSave(row);
+
+  if (!hasTableMarkup(raw)) {
+    return fromSave;
+  }
+
+  if (hasTableMarkup(fromSave)) {
+    return fromSave;
+  }
+
+  if (typeof document !== "undefined") {
+    const wrappedAdd = wrapDiffAdditionsInProposalBodyHtml(raw, row.parts);
+    if (hasTableMarkup(wrappedAdd)) {
+      return wrappedAdd;
+    }
+  }
+
+  return raw;
 }

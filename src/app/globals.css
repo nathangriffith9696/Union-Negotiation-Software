@@ -248,6 +248,16 @@ body {
   color: #475569;
 }
 
+/* Saved proposal body when plain-delete redline was serialized from diff parts */
+.contract-editor-rich-preview .proposal-diff-from-parts {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.contract-editor-rich-preview .proposal-diff-from-parts strong {
+  font-weight: 600;
+}
+
 .contract-editor-rich-preview pre {
   margin: 0.5em 0;
   padding: 0.5rem 0.65rem;

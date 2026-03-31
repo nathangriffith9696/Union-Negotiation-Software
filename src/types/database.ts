@@ -477,7 +477,12 @@ export type UnionNegotiationDatabase = {
       };
     };
     Views: Record<string, never>;
-    Functions: Record<string, never>;
+    Functions: {
+      delete_all_proposals_for_negotiation_restore: {
+        Args: { p_negotiation_id: string };
+        Returns: undefined;
+      };
+    };
     Enums: {
       app_role: AppRole;
     };
