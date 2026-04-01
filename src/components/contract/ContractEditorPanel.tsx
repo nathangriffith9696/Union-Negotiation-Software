@@ -1721,25 +1721,78 @@ export function ContractEditorPanel({
       }
 
       let effectiveMasterId = negRow.master_contract_id;
-      if (latestMaster) {
-        if (!effectiveMasterId) {
-          const { error: linkErr } = await supabase
-            .from("negotiations")
-            .update({ master_contract_id: latestMaster.id } as never)
-            .eq("id", negotiationId)
-            .is("master_contract_id", null);
-          if (!linkErr) {
-            effectiveMasterId = latestMaster.id;
+
+      let versionsPayload: unknown[] | null = verRes.data ?? [];
+      let draftRow = draftRes.data as
+        | { body_html: string; updated_at: string }
+        | null;
+
+      const shouldSyncWorkspaceToMaster =
+        latestMaster !== null &&
+        negRow.master_contract_id !== latestMaster.id;
+
+      if (shouldSyncWorkspaceToMaster) {
+        const { error: syncErr } = await supabase.rpc(
+          "sync_negotiation_workspace_to_master",
+          {
+            p_negotiation_id: negotiationId,
+            p_master_contract_id: latestMaster.id,
           }
-        } else if (effectiveMasterId !== latestMaster.id) {
-          const { error: bumpErr } = await supabase
-            .from("negotiations")
-            .update({ master_contract_id: latestMaster.id } as never)
-            .eq("id", negotiationId);
-          if (!bumpErr) {
-            effectiveMasterId = latestMaster.id;
+        );
+        if (syncErr) {
+          setWorkspaceSyncing(false);
+          const msg =
+            syncErr.message.trim() ||
+            "Could not align the workspace to the new master contract.";
+          if (softSync) {
+            setSaveError(`Could not refresh workspace: ${msg}`);
+            return;
           }
+          setLoadState({ kind: "error", message: msg });
+          return;
         }
+        effectiveMasterId = latestMaster.id;
+        clearDraftReviewBaselineMasterSession(negotiationId);
+        setDraftReviewBaselineOverrideHtml(null);
+
+        const [verSync, draftSync] = await Promise.all([
+          supabase
+            .from("negotiation_contract_versions")
+            .select("id, version_number, body_html, created_at")
+            .eq("negotiation_id", negotiationId)
+            .order("version_number", { ascending: false }),
+          supabase
+            .from("negotiation_contract_drafts")
+            .select("body_html, updated_at")
+            .eq("negotiation_id", negotiationId)
+            .maybeSingle(),
+        ]);
+        if (verSync.error) {
+          setWorkspaceSyncing(false);
+          if (softSync) {
+            setSaveError(
+              `Could not refresh workspace: ${verSync.error.message}`
+            );
+            return;
+          }
+          setLoadState({ kind: "error", message: verSync.error.message });
+          return;
+        }
+        if (draftSync.error) {
+          setWorkspaceSyncing(false);
+          if (softSync) {
+            setSaveError(
+              `Could not refresh workspace: ${draftSync.error.message}`
+            );
+            return;
+          }
+          setLoadState({ kind: "error", message: draftSync.error.message });
+          return;
+        }
+        versionsPayload = verSync.data ?? [];
+        draftRow = draftSync.data as
+          | { body_html: string; updated_at: string }
+          | null;
       }
 
       let masterContractVersion: number | null = null;
@@ -1757,11 +1810,8 @@ export function ContractEditorPanel({
         }
       }
 
-      const versions = (verRes.data ?? []) as ContractVersionItem[];
+      const versions = (versionsPayload ?? []) as ContractVersionItem[];
       const latest = versions[0] ?? null;
-      const draftRow = draftRes.data as
-        | { body_html: string; updated_at: string }
-        | null;
 
       const draftHtml = draftRow?.body_html;
       const draftIsReal = !isUnseededDraft(draftHtml);

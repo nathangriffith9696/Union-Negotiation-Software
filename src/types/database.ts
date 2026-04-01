@@ -482,6 +482,13 @@ export type UnionNegotiationDatabase = {
         Args: { p_negotiation_id: string };
         Returns: undefined;
       };
+      sync_negotiation_workspace_to_master: {
+        Args: {
+          p_negotiation_id: string;
+          p_master_contract_id: string;
+        };
+        Returns: undefined;
+      };
     };
     Enums: {
       app_role: AppRole;
