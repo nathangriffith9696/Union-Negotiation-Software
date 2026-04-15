@@ -98,8 +98,8 @@ export async function POST(request: NextRequest) {
 
   const { error: profileErr } = await admin
     .from("profiles")
-    .update({ role: roleRaw })
-    .eq("id", userId);
+    .update({ role: roleRaw } as never)
+    .eq("id", userId as never);
 
   if (profileErr) {
     return NextResponse.json(
