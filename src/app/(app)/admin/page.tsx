@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AdminDeleteUserPanel } from "@/components/admin/AdminDeleteUserPanel";
 import { AdminDistrictsLocalsCard } from "@/components/admin/AdminDistrictsLocalsCard";
 import { AdminPeopleAccessCard } from "@/components/admin/AdminPeopleAccessCard";
 import { Card } from "@/components/ui/Card";
@@ -32,6 +33,15 @@ type MasterListRow = {
   } | null;
 };
 
+type AdminTab = "people" | "org" | "contracts" | "users";
+
+const ADMIN_TABS: { id: AdminTab; label: string }[] = [
+  { id: "people", label: "People & access" },
+  { id: "org", label: "Organization" },
+  { id: "contracts", label: "Master contracts" },
+  { id: "users", label: "Users" },
+];
+
 function masterRowLabel(row: MasterListRow): string {
   const { localName, districtName } = labelsFromLocalRelation(row.locals);
   return `${localName} · ${districtName}`;
@@ -60,6 +70,9 @@ export default function AdminPage() {
   const [localListErr, setLocalListErr] = useState<string | null>(null);
   const [masterListKey, setMasterListKey] = useState(0);
   const [catalogRevision, setCatalogRevision] = useState(0);
+  const [peopleRevision, setPeopleRevision] = useState(0);
+  const [myUserId, setMyUserId] = useState<string | null>(null);
+  const [adminTab, setAdminTab] = useState<AdminTab>("people");
 
   const [docxFile, setDocxFile] = useState<File | null>(null);
   const [docxStagingId, setDocxStagingId] = useState<string | null>(null);
@@ -83,9 +96,15 @@ export default function AdminPage() {
       try {
         const supabase = createSupabaseClient();
         const profile = await fetchMyProfile(supabase);
-        if (!cancelled) setRole(profile?.role ?? null);
+        if (!cancelled) {
+          setRole(profile?.role ?? null);
+          setMyUserId(profile?.id ?? null);
+        }
       } catch {
-        if (!cancelled) setRole(null);
+        if (!cancelled) {
+          setRole(null);
+          setMyUserId(null);
+        }
       } finally {
         if (!cancelled) setRoleLoading(false);
       }
@@ -335,6 +354,7 @@ export default function AdminPage() {
         "Invitation sent. They can finish sign-up from the email link."
       );
       setInviteEmail("");
+      setPeopleRevision((n) => n + 1);
     } catch (err) {
       setInviteErr(err instanceof Error ? err.message : "Invite failed.");
     } finally {
@@ -397,23 +417,50 @@ export default function AdminPage() {
         title="Admin"
         description={
           isSuperAdmin
-            ? "Districts and locals, people & access, master uploads, and invitations. Service role key is required on the server for invitations."
+            ? "Use the tabs to switch sections. Invites and user removal need the service role key on the server."
             : "Assign field reps to locals in your districts."
         }
       />
 
       <div className={isSuperAdmin ? "space-y-6" : "space-y-4"}>
-        <AdminPeopleAccessCard
-          viewerRole={role}
-          catalogRevision={catalogRevision}
-        />
-
         {isSuperAdmin ? (
           <>
-        <AdminDistrictsLocalsCard
-          onCatalogChanged={() => setCatalogRevision((n) => n + 1)}
-        />
+            <nav
+              className="-mx-1 flex flex-wrap gap-1 border-b border-slate-200"
+              aria-label="Admin sections"
+            >
+              {ADMIN_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => setAdminTab(t.id)}
+                  className={`rounded-t-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                    adminTab === t.id
+                      ? "border border-b-0 border-slate-200 bg-white text-slate-900"
+                      : "text-slate-600 hover:bg-slate-50 hover:text-slate-900"
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </nav>
 
+            {adminTab === "people" ? (
+              <AdminPeopleAccessCard
+                viewerRole={role}
+                catalogRevision={catalogRevision}
+                peopleRevision={peopleRevision}
+              />
+            ) : null}
+
+            {adminTab === "org" ? (
+              <AdminDistrictsLocalsCard
+                onCatalogChanged={() => setCatalogRevision((n) => n + 1)}
+              />
+            ) : null}
+
+            {adminTab === "contracts" ? (
+              <div className="space-y-6">
         <Card>
           <h2 className="text-base font-semibold text-slate-900">
             Master contract (.txt)
@@ -599,77 +646,6 @@ export default function AdminPage() {
 
         <Card>
           <h2 className="text-base font-semibold text-slate-900">
-            Invite user
-          </h2>
-          <p className="mt-2 text-sm text-slate-600">
-            Sends a Supabase invite email. Set{" "}
-            <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
-              SUPABASE_SERVICE_ROLE_KEY
-            </code>{" "}
-            on the server and add your site URL to Supabase Auth redirect
-            allowlist.
-          </p>
-          <form className="mt-6 space-y-4" onSubmit={(e) => void submitInvite(e)}>
-            <div>
-              <label
-                htmlFor="admin-email"
-                className="block text-sm font-medium text-slate-700"
-              >
-                Email
-              </label>
-              <input
-                id="admin-email"
-                type="email"
-                autoComplete="email"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-                className="mt-1 w-full max-w-md rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-300"
-              />
-            </div>
-            <div>
-              <label
-                htmlFor="admin-role"
-                className="block text-sm font-medium text-slate-700"
-              >
-                Role after sign-up
-              </label>
-              <select
-                id="admin-role"
-                value={inviteRole}
-                onChange={(e) => setInviteRole(e.target.value as AppRole)}
-                className="mt-1 w-full max-w-md rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-300"
-              >
-                <option value="field_rep">{formatAppRole("field_rep")}</option>
-                <option value="regional_director">
-                  {formatAppRole("regional_director")}
-                </option>
-                <option value="super_admin">
-                  {formatAppRole("super_admin")}
-                </option>
-              </select>
-            </div>
-            {inviteErr ? (
-              <p className="text-sm text-red-600" role="alert">
-                {inviteErr}
-              </p>
-            ) : null}
-            {inviteMsg ? (
-              <p className="text-sm text-emerald-700" role="status">
-                {inviteMsg}
-              </p>
-            ) : null}
-            <button
-              type="submit"
-              disabled={inviting}
-              className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {inviting ? "Sending…" : "Send invite"}
-            </button>
-          </form>
-        </Card>
-
-        <Card>
-          <h2 className="text-base font-semibold text-slate-900">
             Recent master uploads
           </h2>
           {mastersErr ? (
@@ -696,8 +672,108 @@ export default function AdminPage() {
             </ul>
           )}
         </Card>
+              </div>
+            ) : null}
+
+            {adminTab === "users" ? (
+              <div className="space-y-6">
+                <Card>
+                  <h2 className="text-base font-semibold text-slate-900">
+                    Invite user
+                  </h2>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Sends a Supabase invite email. Set{" "}
+                    <code className="rounded bg-slate-100 px-1 py-0.5 text-xs">
+                      SUPABASE_SERVICE_ROLE_KEY
+                    </code>{" "}
+                    on the server and add your site URL to Supabase Auth redirect
+                    allowlist.
+                  </p>
+                  <form
+                    className="mt-6 space-y-4"
+                    onSubmit={(e) => void submitInvite(e)}
+                  >
+                    <div>
+                      <label
+                        htmlFor="admin-email"
+                        className="block text-sm font-medium text-slate-700"
+                      >
+                        Email
+                      </label>
+                      <input
+                        id="admin-email"
+                        type="email"
+                        autoComplete="email"
+                        value={inviteEmail}
+                        onChange={(e) => setInviteEmail(e.target.value)}
+                        className="mt-1 w-full max-w-md rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-300"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        htmlFor="admin-role"
+                        className="block text-sm font-medium text-slate-700"
+                      >
+                        Role after sign-up
+                      </label>
+                      <select
+                        id="admin-role"
+                        value={inviteRole}
+                        onChange={(e) =>
+                          setInviteRole(e.target.value as AppRole)
+                        }
+                        className="mt-1 w-full max-w-md rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm outline-none focus:border-slate-400 focus:ring-1 focus:ring-slate-300"
+                      >
+                        <option value="field_rep">
+                          {formatAppRole("field_rep")}
+                        </option>
+                        <option value="regional_director">
+                          {formatAppRole("regional_director")}
+                        </option>
+                        <option value="super_admin">
+                          {formatAppRole("super_admin")}
+                        </option>
+                      </select>
+                    </div>
+                    {inviteErr ? (
+                      <p className="text-sm text-red-600" role="alert">
+                        {inviteErr}
+                      </p>
+                    ) : null}
+                    {inviteMsg ? (
+                      <p className="text-sm text-emerald-700" role="status">
+                        {inviteMsg}
+                      </p>
+                    ) : null}
+                    <button
+                      type="submit"
+                      disabled={inviting}
+                      className="rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-800 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {inviting ? "Sending…" : "Send invite"}
+                    </button>
+                  </form>
+                </Card>
+                {myUserId ? (
+                  <AdminDeleteUserPanel
+                    currentUserId={myUserId}
+                    onRemoved={() => setPeopleRevision((n) => n + 1)}
+                  />
+                ) : (
+                  <Card>
+                    <p className="text-sm text-slate-600">Loading account…</p>
+                  </Card>
+                )}
+              </div>
+            ) : null}
           </>
-        ) : null}
+        ) : (
+          <AdminPeopleAccessCard
+            viewerRole={role}
+            catalogRevision={catalogRevision}
+            peopleRevision={peopleRevision}
+          />
+        )}
       </div>
     </>
   );

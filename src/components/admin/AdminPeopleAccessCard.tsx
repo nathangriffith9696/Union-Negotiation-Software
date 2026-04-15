@@ -49,10 +49,13 @@ function localSearchText(row: LocalOption): string {
 export function AdminPeopleAccessCard({
   viewerRole,
   catalogRevision = 0,
+  peopleRevision = 0,
 }: {
   viewerRole: AppRole;
   /** Increment when districts/locals change elsewhere (e.g. admin catalog). */
   catalogRevision?: number;
+  /** Increment when users are removed or roles change elsewhere (e.g. admin delete user). */
+  peopleRevision?: number;
 }) {
   const isSuper = viewerRole === "super_admin";
   const canAssignReps = canManageFieldRepAssignments(viewerRole);
@@ -154,7 +157,7 @@ export function AdminPeopleAccessCard({
 
   useEffect(() => {
     void loadAll();
-  }, [loadAll, catalogRevision]);
+  }, [loadAll, catalogRevision, peopleRevision]);
 
   useEffect(() => {
     setLocalQuery("");
