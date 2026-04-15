@@ -188,7 +188,7 @@ export default function DocumentsPage() {
           return;
         }
 
-        const typed = (data ?? []) as DocumentWithRelationsRow[];
+        const typed = (data ?? []) as unknown as DocumentWithRelationsRow[];
         const list = typed.map(mapSupabaseRow);
 
         setRows(list);

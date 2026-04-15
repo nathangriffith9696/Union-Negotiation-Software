@@ -23,6 +23,11 @@ export async function fetchMyProfile(
   return data as ProfileRow;
 }
 
+/** Super admin or regional director may manage field-rep ↔ local assignments. */
+export function canManageFieldRepAssignments(role: AppRole | null): boolean {
+  return role === "super_admin" || role === "regional_director";
+}
+
 export function formatAppRole(role: AppRole): string {
   switch (role) {
     case "super_admin":

@@ -183,7 +183,7 @@ export default function NotesPage() {
           return;
         }
 
-        const typed = (data ?? []) as NoteWithRelationsRow[];
+        const typed = (data ?? []) as unknown as NoteWithRelationsRow[];
         const list = typed.map(mapSupabaseRow);
 
         setRows(list);

@@ -124,7 +124,7 @@ export default function BargainingUnitsPage() {
           return;
         }
 
-        const typed = (data ?? []) as BargainingUnitWithRelationsRow[];
+        const typed = (data ?? []) as unknown as BargainingUnitWithRelationsRow[];
         const list = typed.map(mapSupabaseRow);
 
         setRows(list);

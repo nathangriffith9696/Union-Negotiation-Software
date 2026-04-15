@@ -166,7 +166,7 @@ export default function SessionsPage() {
           return;
         }
 
-        const typed = (data ?? []) as SessionWithRelationsRow[];
+        const typed = (data ?? []) as unknown as SessionWithRelationsRow[];
         const list = typed.map(mapSupabaseRow);
 
         setRows(list);

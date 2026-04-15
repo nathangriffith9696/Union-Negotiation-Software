@@ -149,7 +149,7 @@ export default function LocalsPage() {
           return;
         }
 
-        const typed = (data ?? []) as LocalWithRelationsRow[];
+        const typed = (data ?? []) as unknown as LocalWithRelationsRow[];
         const list: LocalRowVM[] = typed.map((row) => ({
           id: row.id,
           name: row.name,

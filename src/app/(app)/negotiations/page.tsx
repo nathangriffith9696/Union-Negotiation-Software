@@ -153,7 +153,7 @@ export default function NegotiationsPage() {
           return;
         }
 
-        const typed = (data ?? []) as NegotiationWithRelationsRow[];
+        const typed = (data ?? []) as unknown as NegotiationWithRelationsRow[];
         const list = typed.map(mapSupabaseRow);
 
         setRows(list);

@@ -114,7 +114,7 @@ export default function DistrictsPage() {
           return;
         }
 
-        const typed = (data ?? []) as DistrictWithLocalsRow[];
+        const typed = (data ?? []) as unknown as DistrictWithLocalsRow[];
         const list = typed.map((row) => {
           const nested = row.locals;
           const localsList = Array.isArray(nested)

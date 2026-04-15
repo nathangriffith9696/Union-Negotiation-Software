@@ -238,7 +238,7 @@ function ProposalsPageContent() {
           return;
         }
 
-        const typed = (data ?? []) as ProposalWithRelationsRow[];
+        const typed = (data ?? []) as unknown as ProposalWithRelationsRow[];
         const mapped = typed.map(mapSupabaseRow);
         const list = scopeIsUuid
           ? sortProposalsBargainingOrder(mapped)

@@ -661,7 +661,7 @@ export default function NegotiationDetailPage() {
           return;
         }
 
-        const negRow = negRes.data as NegotiationDetailRow;
+        const negRow = negRes.data as unknown as NegotiationDetailRow;
         setNegotiation(mapNegotiationRow(negRow));
 
         setSessions(

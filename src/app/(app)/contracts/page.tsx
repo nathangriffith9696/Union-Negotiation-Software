@@ -112,7 +112,7 @@ export default function AgreementsLibraryPage() {
           return;
         }
 
-        const list = (data ?? []) as MasterRow[];
+        const list = (data ?? []) as unknown as MasterRow[];
         setRows(list);
         setStatus(list.length === 0 ? "empty" : "ready");
       } catch (e) {

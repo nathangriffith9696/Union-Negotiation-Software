@@ -224,7 +224,7 @@ export default function AgreementDetailPage() {
           return;
         }
 
-        setState({ kind: "ready", row: data as DetailRow });
+        setState({ kind: "ready", row: data as unknown as DetailRow });
       } catch (e) {
         if (cancelled) return;
         setState({

@@ -329,7 +329,7 @@ export function Sidebar() {
             </Link>
           );
         })}
-        {appRole === "super_admin" ? (
+        {appRole === "super_admin" || appRole === "regional_director" ? (
           <Link
             href="/admin"
             className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${

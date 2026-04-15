@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AdminDistrictsLocalsCard } from "@/components/admin/AdminDistrictsLocalsCard";
+import { AdminPeopleAccessCard } from "@/components/admin/AdminPeopleAccessCard";
 import { Card } from "@/components/ui/Card";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { formatAppRole, fetchMyProfile } from "@/lib/profiles";
@@ -57,6 +59,7 @@ export default function AdminPage() {
   const [mastersErr, setMastersErr] = useState<string | null>(null);
   const [localListErr, setLocalListErr] = useState<string | null>(null);
   const [masterListKey, setMasterListKey] = useState(0);
+  const [catalogRevision, setCatalogRevision] = useState(0);
 
   const [docxFile, setDocxFile] = useState<File | null>(null);
   const [docxStagingId, setDocxStagingId] = useState<string | null>(null);
@@ -107,7 +110,7 @@ export default function AdminPage() {
         return;
       }
       setLocalListErr(null);
-      const rows = (data ?? []) as LocalRowWithDistrict[];
+      const rows = (data ?? []) as unknown as LocalRowWithDistrict[];
       const list: LocalOption[] = rows.map((row) => {
         const { localName, districtName } = labelsFromLocalRelation({
           name: row.name,
@@ -121,7 +124,7 @@ export default function AdminPage() {
     return () => {
       cancelled = true;
     };
-  }, [supabaseOn, role]);
+  }, [supabaseOn, role, catalogRevision]);
 
   useEffect(() => {
     if (!supabaseOn || role !== "super_admin") return;
@@ -148,7 +151,7 @@ export default function AdminPage() {
         return;
       }
       setMastersErr(null);
-      setMasters((data ?? []) as MasterListRow[]);
+      setMasters((data ?? []) as unknown as MasterListRow[]);
     })();
     return () => {
       cancelled = true;
@@ -368,32 +371,49 @@ export default function AdminPage() {
     );
   }
 
-  if (role !== "super_admin") {
+  if (role !== "super_admin" && role !== "regional_director") {
     return (
       <>
         <PageHeader
           title="Admin"
-          description="Restricted to super administrators."
+          description="Restricted to super administrators and regional directors."
         />
         <Card>
           <p className="text-sm text-slate-600">
             {role
-              ? `You are signed in as ${formatAppRole(role)}. Only super admins can open this page.`
-              : "Sign in with a super admin account to use these tools."}
+              ? `You are signed in as ${formatAppRole(role)}.`
+              : "Sign in to continue."}
           </p>
         </Card>
       </>
     );
   }
 
+  const isSuperAdmin = role === "super_admin";
+
   return (
     <>
       <PageHeader
         title="Admin"
-        description="Upload master agreement text and invite staff. Service role key is required on the server for invitations."
+        description={
+          isSuperAdmin
+            ? "Districts and locals, people & access, master uploads, and invitations. Service role key is required on the server for invitations."
+            : "Assign field reps to locals in your districts."
+        }
       />
 
-      <div className="space-y-8">
+      <div className={isSuperAdmin ? "space-y-6" : "space-y-4"}>
+        <AdminPeopleAccessCard
+          viewerRole={role}
+          catalogRevision={catalogRevision}
+        />
+
+        {isSuperAdmin ? (
+          <>
+        <AdminDistrictsLocalsCard
+          onCatalogChanged={() => setCatalogRevision((n) => n + 1)}
+        />
+
         <Card>
           <h2 className="text-base font-semibold text-slate-900">
             Master contract (.txt)
@@ -676,6 +696,8 @@ export default function AdminPage() {
             </ul>
           )}
         </Card>
+          </>
+        ) : null}
       </div>
     </>
   );

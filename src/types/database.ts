@@ -69,6 +69,13 @@ export type LocalAssignmentRow = {
   created_at: string;
 };
 
+/** Super admin assigns which districts each regional director covers. */
+export type RegionalDirectorDistrictRow = {
+  user_id: string;
+  district_id: string;
+  created_at: string;
+};
+
 export type DistrictRow = {
   id: string;
   name: string;
@@ -395,6 +402,18 @@ export type UnionNegotiationDatabase = {
         Row: LocalAssignmentRow;
         Insert: LocalAssignmentInsert;
         Update: LocalAssignmentUpdate;
+        Relationships: [];
+      };
+      regional_director_districts: {
+        Row: RegionalDirectorDistrictRow;
+        Insert: {
+          user_id: string;
+          district_id: string;
+          created_at?: string;
+        };
+        Update: Partial<
+          Omit<RegionalDirectorDistrictRow, "user_id" | "district_id">
+        >;
         Relationships: [];
       };
       districts: {

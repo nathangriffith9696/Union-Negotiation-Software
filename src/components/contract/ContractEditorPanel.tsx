@@ -1677,7 +1677,7 @@ export function ContractEditorPanel({
         return;
       }
 
-      const negRow = negRes.data as {
+      const negRow = negRes.data as unknown as {
         title: string;
         master_contract_id: string | null;
         bargaining_units:
@@ -1732,11 +1732,12 @@ export function ContractEditorPanel({
         negRow.master_contract_id !== latestMaster.id;
 
       if (shouldSyncWorkspaceToMaster) {
+        const masterRow = latestMaster!;
         const { error: syncErr } = await supabase.rpc(
           "sync_negotiation_workspace_to_master",
           {
             p_negotiation_id: negotiationId,
-            p_master_contract_id: latestMaster.id,
+            p_master_contract_id: masterRow.id,
           }
         );
         if (syncErr) {
@@ -1751,7 +1752,7 @@ export function ContractEditorPanel({
           setLoadState({ kind: "error", message: msg });
           return;
         }
-        effectiveMasterId = latestMaster.id;
+        effectiveMasterId = masterRow.id;
         clearDraftReviewBaselineMasterSession(negotiationId);
         setDraftReviewBaselineOverrideHtml(null);
 
